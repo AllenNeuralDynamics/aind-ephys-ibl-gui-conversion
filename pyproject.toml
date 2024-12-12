@@ -41,7 +41,7 @@ dev = [
 where = ["src"]
 
 [tool.setuptools.dynamic]
-version = {attr = "aind_ibl_ephy_gui_converter_utils.__version__"}
+version = {attr = "aind-ephy-ibl-gui-conversion.__version__"}
 
 [tool.black]
 line-length = 79
