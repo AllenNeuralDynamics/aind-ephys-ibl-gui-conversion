@@ -40,8 +40,8 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.setuptools.dynamic]
-version = {attr = "aind-ephy-ibl-gui-conversion.__version__"}
+#[tool.setuptools.dynamic]
+#version = {attr = "aind-ephy-ibl-gui-conversion.__version__"}
 
 [tool.black]
 line-length = 79
