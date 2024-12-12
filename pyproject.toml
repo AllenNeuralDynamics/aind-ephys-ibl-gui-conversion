@@ -3,7 +3,7 @@ requires = ["setuptools", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "aind-ephy-ibl-gui-conversion"
+name = "aind-ephys-ibl-gui-conversion"
 description = "Generated from aind-library-template"
 license = {text = "MIT"}
 requires-python = ">=3.9"
@@ -41,7 +41,7 @@ dev = [
 where = ["src"]
 
 #[tool.setuptools.dynamic]
-#version = {attr = "aind-ephy-ibl-gui-conversion.__version__"}
+#version = {attr = "aind-ephys-ibl-gui-conversion.__version__"}
 
 [tool.black]
 line-length = 79
@@ -66,7 +66,7 @@ exclude = '''
 
 [tool.coverage.run]
 omit = ["*__init__*"]
-source = ["aind-ephy-ibl-gui-conversion", "tests"]
+source = ["aind-ephys-ibl-gui-conversion", "tests"]
 
 [tool.coverage.report]
 exclude_lines = [
