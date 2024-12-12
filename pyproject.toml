@@ -3,7 +3,7 @@ requires = ["setuptools", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "aind-ibl-ephy-gui-converter-utils"
+name = "aind-ephy-ibl-gui-conversion"
 description = "Generated from aind-library-template"
 license = {text = "MIT"}
 requires-python = ">=3.9"
