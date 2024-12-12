@@ -3,10 +3,10 @@ requires = ["setuptools", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "aind-ephy-ibl-gui-conversion"
+name = "aind-ibl-ephy-gui-converter-utils"
 description = "Generated from aind-library-template"
 license = {text = "MIT"}
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 authors = [
     {name = "Allen Institute for Neural Dynamics"}
 ]
@@ -17,6 +17,13 @@ readme = "README.md"
 dynamic = ["version"]
 
 dependencies = [
+    "aind-mri-utils",
+    "antspyx>=0.4.2",
+    "iblatlas",
+    "one-api>=2.6.0",
+    "spikeinterface>=0.101.2",
+    "tqdm>=4.66.1",
+    "wavpack-numcodecs",
 ]
 
 [project.optional-dependencies]
@@ -34,7 +41,7 @@ dev = [
 where = ["src"]
 
 [tool.setuptools.dynamic]
-version = {attr = "aind_ephy_ibl_gui_conversion.__version__"}
+version = {attr = "aind_ibl_ephy_gui_converter_utils.__version__"}
 
 [tool.black]
 line-length = 79
@@ -59,7 +66,7 @@ exclude = '''
 
 [tool.coverage.run]
 omit = ["*__init__*"]
-source = ["aind_ephy_ibl_gui_conversion", "tests"]
+source = ["aind_ibl_ephy_gui_converter_utils", "tests"]
 
 [tool.coverage.report]
 exclude_lines = [
