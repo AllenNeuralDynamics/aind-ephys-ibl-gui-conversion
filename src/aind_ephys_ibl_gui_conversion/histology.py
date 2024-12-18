@@ -80,12 +80,12 @@ def projected_onto_line(points,line_N,line_P):
     return line_P+np.outer(projL,line_N)
 
 def order_annotation_pts(points,axis = 2,order = 'desending'):
-    N,pt = find_line_eig(this_probe)
-    proj = projected_onto_line(this_probe,N,pt)
+    N,pt = find_line_eig(points)
+    proj = projected_onto_line(points,N,pt)
     this_order = np.argsort(proj[:,2])
     if order == 'desending':
         this_order = this_order[::-1]
-    return this_probe[this_order,:]
+    return points[this_order,:]
 
 
 def read_json_as_dict(filepath: str):
