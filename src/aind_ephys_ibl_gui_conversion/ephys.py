@@ -35,7 +35,7 @@ def extract_spikes(sorting_folder,results_folder):
 
     # extract stream names
 
-    stream_names, stream_ids = se.get_neo_streams("openephys", ecephys_folder)
+    stream_names, stream_ids = se.get_neo_streams("openephysbinary", ecephys_folder)
 
     neuropix_streams = [s for s in stream_names if 'Neuropix' in s]
     probe_names = [s.split('.')[1].split('-')[0] for s in neuropix_streams]
