@@ -95,7 +95,7 @@ def extract_spikes(sorting_folder,results_folder):
 
         # save depths and channel inds
         np.save(phy_folder / "spike_depths.npy", spike_depths)
-        np.save(phy_folder / "channel_inds.npy", np.arange(analyzer.get_num_channels()), dtype='int'))
+        np.save(phy_folder / "channel_inds.npy", np.arange(analyzer.get_num_channels(), dtype='int'))
 
         # save templates
         cluster_channels = []
