@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 from pathlib import Path
 import shutil
 from tqdm import tqdm
@@ -16,7 +17,7 @@ import spikeinterface.extractors as se
 from spikeinterface.exporters import export_to_phy
 import spikeinterface.preprocessing as spre
 
-def extract_spikes(sorting_folder,results_folder):  
+def extract_spikes(sorting_folder,results_folder, num_shanks:int, min_duration_secs: int = 300):  
     
     session_folder = Path(str(sorting_folder).split('_sorted')[0])
     scratch_folder = Path('/scratch')
@@ -44,6 +45,8 @@ def extract_spikes(sorting_folder,results_folder):
     RMS_WIN_LENGTH_SECS = 3
     WELCH_WIN_LENGTH_SAMPLES = 1024
 
+    analyzer_mappings = []
+
     for idx, stream_name in enumerate(neuropix_streams):
 
         if '-LFP' in stream_name:
@@ -59,80 +62,114 @@ def extract_spikes(sorting_folder,results_folder):
             output_folder.mkdir()
 
         print('Loading sorting analyzer...')
-        analyzer_folder = postprocessed_folder / f'experiment1_{stream_name}_recording1.zarr'
-        if analyzer_folder.is_dir():
-            analyzer = si.load_sorting_analyzer(analyzer_folder)
+        if num_shanks > 1:
+            for shank_index in range(num_shanks):
+                analyzer_folder = postprocessed_folder / f'experiment1_{stream_name}_recording1_group{shank_index}.zarr'
+
+                if analyzer_folder.is_dir():
+                    analyzer = si.load_sorting_analyzer(analyzer_folder)
+                else:
+                    analyzer = si.load_sorting_analyzer_or_waveforms(
+                        postprocessed_folder / f'experiment1_{stream_name}_recording1_group{shank_index}'
+                    )
+                
+                if analyzer.get_total_duration() < min_duration_secs:
+                    continue
+
+                analyzer_mappings.append(analyzer)
         else:
-            analyzer = si.load_sorting_analyzer_or_waveforms(
-                postprocessed_folder / f'experiment1_{stream_name}_recording1'
-            )
+            if analyzer_folder.is_dir():
+                analyzer = si.load_sorting_analyzer(analyzer_folder)
+            else:
+                analyzer = si.load_sorting_analyzer_or_waveforms(
+                    postprocessed_folder / f'experiment1_{stream_name}_recording1'
+                )
+            analyzer_mappings.append(analyzer)
+
 
         phy_folder = scratch_folder / f"{postprocessed_folder.parent.name}_phy"
 
         print('Exporting to phy format...')
-        export_to_phy(analyzer, 
-                      output_folder=phy_folder,
-                      compute_pc_features=False,
-                      remove_if_exists=True,
-                      copy_binary=False,
-                      dtype = 'int16')
 
-        spike_locations = analyzer.get_extension("spike_locations").get_data()
-        spike_depths = spike_locations["y"]
-
-        print('Converting data...')
-        # convert clusters and squeeze
-        clusters = np.load(phy_folder / "spike_clusters.npy")
-        np.save(phy_folder / "spike_clusters.npy",
-                np.squeeze(clusters.astype('uint32')))
-
-        # convert times and squeeze
-        times = np.load(phy_folder / "spike_times.npy")
-        np.save(phy_folder / "spike_times.npy", np.squeeze(times / 30000.).astype('float64'))
-
-        # convert amplitudes and squeeze
-        amps = np.load(phy_folder / "amplitudes.npy")
-        np.save(phy_folder / "amplitudes.npy", np.squeeze(-amps / 1e6).astype('float64'))
-
-        # save depths and channel inds
-        np.save(phy_folder / "spike_depths.npy", spike_depths)
-        np.save(phy_folder / "channel_inds.npy", np.arange(analyzer.get_num_channels(), dtype='int'))
-
+        spike_depths = []
+        clusters = []
+        spike_samples = []
+        amps = []
+        channel_inds_length = 0
         # save templates
-        cluster_channels = []
-        cluster_peakToTrough = []
-        cluster_waveforms = []
-        num_chans = []
+        cluster_channels_shanks = []
+        cluster_peak_to_trough_shanks = []
+        cluster_waveforms_shanks = []
 
-        template_ext = analyzer.get_extension("templates")
-        templates = template_ext.get_templates()
-        channel_locs = analyzer.get_channel_locations()
+        templates = []
+        channel_locs = []
+        quality_metrics = []
 
-        for unit_idx, unit_id in enumerate(analyzer.unit_ids):
-            waveform = templates[unit_idx,:,:]
-            peak_channel = np.argmax(np.max(waveform, 0) - np.min(waveform,0))
-            peak_waveform = waveform[:,peak_channel]
-            peakToTrough = (np.argmax(peak_waveform) - np.argmin(peak_waveform)) / 30000.
-            cluster_channels.append(peak_channel)#int(channel_locs[peak_channel,1] / 10))
-            cluster_peakToTrough.append(peakToTrough)
-            cluster_waveforms.append(waveform)
 
-        np.save(phy_folder / "cluster_peakToTrough.npy", np.array(cluster_peakToTrough))
-        np.save(phy_folder / "cluster_waveforms.npy", np.stack(cluster_waveforms))
-        np.save(phy_folder / "cluster_channels.npy", np.array(cluster_channels))
+        for analyzer in analyzer_mappings:
+            export_to_phy(analyzer, 
+                        output_folder=phy_folder,
+                        compute_pc_features=False,
+                        remove_if_exists=True,
+                        copy_binary=False,
+                        dtype = 'int16')
 
-        # rename files
-        _FILE_RENAMES = [  # file_in, file_out
-                ('channel_positions.npy', 'channels.localCoordinates.npy'),
-                ('channel_inds.npy', 'channels.rawInd.npy'),
-                ('cluster_peakToTrough.npy', 'clusters.peakToTrough.npy'),
-                ('cluster_channels.npy', 'clusters.channels.npy'),
-                ('cluster_waveforms.npy', 'clusters.waveforms.npy'),
-                ('spike_clusters.npy', 'spikes.clusters.npy'),
-                ('amplitudes.npy', 'spikes.amps.npy'),
-                ('spike_depths.npy', 'spikes.depths.npy'),
-                ('spike_times.npy', 'spikes.times.npy'),
-            ]
+            spike_locations = analyzer.get_extension("spike_locations").get_data()
+            template_ext = analyzer.get_extension("templates")
+            templates = template_ext.get_templates()
+            cluster_channels = []
+            cluster_peak_to_trough = []
+            cluster_waveforms = []
+
+            for unit_idx, unit_id in enumerate(analyzer.unit_ids):
+                waveform = templates[unit_idx,:,:]
+                peak_channel = np.argmax(np.max(waveform, 0) - np.min(waveform,0))
+                peak_waveform = waveform[:,peak_channel]
+                peakToTrough = (np.argmax(peak_waveform) - np.argmin(peak_waveform)) / 30000.
+                cluster_channels.append(peak_channel)#int(channel_locs[peak_channel,1] / 10))
+                cluster_peak_to_trough.append(peakToTrough)
+                cluster_waveforms.append(waveform)
+
+            print('Converting data...')
+
+            if len(clusters) == 0:
+                clusters.append(np.load(phy_folder / "spike_clusters.npy"))
+            else:
+                shank_clusters = np.load(phy_folder / 'spike_clusters.npy')
+                shank_clusters = np.array([cluster + clusters[-1][-1] for cluster in shank_clusters])
+                clusters.append(shank_clusters)
+            
+            spike_samples.append(np.load(phy_folder / "spike_times.npy"))
+            amps.append(np.load(phy_folder / "amplitudes.npy"))
+            spike_depths.append(spike_locations["y"])
+            channel_inds_length += analyzer.get_num_channels()
+            channel_locs.append(analyzer.get_channel_locations())
+            cluster_channels_shanks.append(np.array(cluster_channels))
+            cluster_peak_to_trough_shanks.append(np.array(cluster_peak_to_trough))
+            cluster_waveforms_shanks.append(np.array(cluster_waveforms))
+
+            # save quality metrics
+            qm = analyzer.get_extension("quality_metrics")
+
+            qm_data = qm.get_data()
+
+            qm_data.index.name = 'cluster_id'
+            qm_data['cluster_id.1'] = qm_data.index.values
+            quality_metrics.append(qm_data)
+
+        """
+            # rename files
+            _FILE_RENAMES = [  # file_in, file_out
+                    ('channel_positions.npy', 'channels.localCoordinates.npy'),
+                    ('channel_inds.npy', 'channels.rawInd.npy'),
+                    ('cluster_peakToTrough.npy', 'clusters.peakToTrough.npy'),
+                    ('cluster_channels.npy', 'clusters.channels.npy'),
+                    ('cluster_waveforms.npy', 'clusters.waveforms.npy'),
+                    ('spike_clusters.npy', 'spikes.clusters.npy'),
+                    ('amplitudes.npy', 'spikes.amps.npy'),
+                    ('spike_depths.npy', 'spikes.depths.npy'),
+                    ('spike_times.npy', 'spikes.times.npy'),
+                ]
 
         input_directory = phy_folder
         
@@ -140,16 +177,29 @@ def extract_spikes(sorting_folder,results_folder):
             old_name = input_directory / names[0]
             new_name = output_folder / names[1]
             shutil.copyfile(old_name, new_name)
-
-        # save quality metrics
-        qm = analyzer.get_extension("quality_metrics")
-
-        qm_data = qm.get_data()
-
-        qm_data.index.name = 'cluster_id'
-        qm_data['cluster_id.1'] = qm_data.index.values
-
-        qm_data.to_csv(output_folder / 'clusters.metrics.csv')
+        """
+        if len(analyzer_mappings) == 1:
+            np.save(output_folder / "spikes.clusters.npy", np.squeeze(clusters[0].astype('uint32')))
+            np.save(output_folder / "spikes.times.npy", np.squeeze(spike_samples[0] / 30000.).astype('float64'))
+            np.save(output_folder / "spikes.amps.npy", np.squeeze(-amps[0]).astype('float64'))
+            np.save(output_folder / "channels.rawInd.npy", np.arange(channel_inds_length, dtype='int'))
+            np.save(output_folder / "spikes.depths.npy", spike_depths[0])
+            np.save(output_folder / "clusters.peakToTrough.npy", cluster_peak_to_trough_shanks[0])
+            np.save(output_folder / "clusters.waveforms.npy", cluster_waveforms_shanks[0])
+            np.save(output_folder / "clusters.channels.npy", cluster_channels_shanks[0])
+            np.save(output_folder / "channels.localCoordinates.npy", channel_locs[0])
+            quality_metrics[0].to_csv(output_folder / 'clusters.metrics.csv')
+        else:
+            np.save(output_folder / "spikes.clusters.npy", np.squeeze(np.concatenate(clusters).astype('uint32')))
+            np.save(output_folder / "spikes.times.npy", np.squeeze(np.concatenate(spike_samples) / 30000.).astype('float64'))
+            np.save(output_folder / "spikes.amps.npy", np.squeeze(-np.concatenate(amps)).astype('float64'))
+            np.save(output_folder / "channels.rawInd.npy", np.arange(channel_inds_length, dtype='int'))
+            np.save(output_folder / "spikes.depths.npy", np.concatenate(spike_depths))
+            np.save(output_folder / "clusters.peakToTrough.npy", np.concatenate(cluster_peak_to_trough_shanks))
+            np.save(output_folder / "clusters.waveforms.npy", np.concatenate(cluster_waveforms_shanks))
+            np.save(output_folder / "clusters.channels.npy", np.concatenate(cluster_channels_shanks))
+            np.save(output_folder / "channels.localCoordinates.npy", np.concatenate(channel_locs))
+            pd.concat(quality_metrics).to_csv(output_folder / 'clusters.metrics.csv')
 
 def _save_continous_metrics(recording: si.BaseRecording, output_folder: Path, channel_inds: np.ndarray,
                         RMS_WIN_LENGTH_SECS = 3,
@@ -309,7 +359,6 @@ def get_mappings(main_recordings: dict, recording_mappings: dict, neuropix_strea
     return main_recordings, recording_mappings
 
 def extract_continuous(sorting_folder: Path,results_folder: Path, min_duration_secs: int = 300,
-                       num_shanks:int = 1,
                        probe_surface_finding: Path| None = None):
 
     session_folder = Path(str(sorting_folder).split('_sorted')[0])
