@@ -210,8 +210,11 @@ def extract_continuous(sorting_folder,results_folder,
             )
         recording = si.read_zarr(ecephys_compressed_folder / f"experiment1_{stream_name}.zarr")
 
-        good_channel_mask = np.isin(recording.channel_ids, analyzer.channel_ids)
-        channel_inds = np.arange(recording.get_num_channels())[good_channel_mask]
+        
+        #good_channel_mask = np.isin(recording.channel_ids, analyzer.channel_ids)
+        #channel_inds = np.arange(recording.get_num_channels())[good_channel_mask]
+        we_recless = si.load_sorting_analyzer_or_waveforms(we_folder)
+        channel_inds = np.array([int(name[2:])-1 for name in we_recless.channel_ids])
 
         print(f'Stream sample rate: {recording.sampling_frequency}')
 
