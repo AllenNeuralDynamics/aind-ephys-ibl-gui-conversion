@@ -213,6 +213,9 @@ def extract_continuous(sorting_folder,results_folder,
         
         #good_channel_mask = np.isin(recording.channel_ids, analyzer.channel_ids)
         #channel_inds = np.arange(recording.get_num_channels())[good_channel_mask]
+        we_folder = Path(glob.glob(f'{postprocessed_folder}/experiment1_{neuropix_streams[0]}_recording1*')[0])
+        postprocessed_folder = sorting_folder / 'postprocessed'
+ 
         we_recless = si.load_sorting_analyzer_or_waveforms(we_folder)
         channel_inds = np.array([int(name[2:])-1 for name in we_recless.channel_ids])
 
