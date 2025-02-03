@@ -78,6 +78,7 @@ def extract_spikes(sorting_folder,results_folder, num_shanks:int, min_duration_s
 
                 analyzer_mappings.append(analyzer)
         else:
+            analyzer_folder = postprocessed_folder / f'experiment1_{stream_name}_recording1.zarr'
             if analyzer_folder.is_dir():
                 analyzer = si.load_sorting_analyzer(analyzer_folder)
             else:
@@ -332,7 +333,7 @@ def get_mappings(main_recordings: dict, recording_mappings: dict, neuropix_strea
                 if 'AP' not in stream_name and 'LFP' not in stream_name:
                     key = f"{stream_name}-AP"
                 else:
-                    key = {stream_name}
+                    key = stream_name
 
                 if recording_group.get_total_duration() < min_duration_secs:
                     if key not in recording_mappings:
@@ -448,7 +449,7 @@ def extract_continuous(sorting_folder: Path,results_folder: Path, min_duration_s
                 min_samples = min([recording.get_num_samples() for recording in main_recordings[stream_name]])
                 main_recordings_lfp = [main_recording.frame_slice(start_frame=0, end_frame=min_samples) for main_recording in main_recordings[stream_name]]
 
-                recordings_removed = remove_overlapping_channels(total_recordings)
+                recordings_removed = remove_overlapping_channels(main_recordings_lfp)
                 recording_lfp = si.aggregate_channels(recording_list=recordings_removed)
 
             out_channel_ids = recording_lfp.channel_ids[out_channel_mask]
