@@ -209,12 +209,12 @@ def extract_continuous(sorting_folder,results_folder,
             analyzer = si.load_sorting_analyzer_or_waveforms(
                 postprocessed_folder / f'experiment1_{ap_stream_name}_recording1'
             )
-        recording = si.read_zarr(ecephys_compressed_folder / f"experiment1_{stream_name}.zarr")
+        recording = si.read_zarr(ecephys_compressed_folder / f"experiment1_{ap_stream_name}.zarr")
 
         
         #good_channel_mask = np.isin(recording.channel_ids, analyzer.channel_ids)
         #channel_inds = np.arange(recording.get_num_channels())[good_channel_mask]
-        we_folder = Path(glob.glob(f'{postprocessed_folder}/experiment1_{neuropix_streams[0]}_recording1*')[0])
+        we_folder = Path(glob.glob(f'{postprocessed_folder}/experiment1_{stream_name}_recording1*')[0])
         postprocessed_folder = sorting_folder / 'postprocessed'
  
         we_recless = si.load_sorting_analyzer_or_waveforms(we_folder)
