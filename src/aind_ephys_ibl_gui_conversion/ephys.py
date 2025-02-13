@@ -17,7 +17,7 @@ import spikeinterface.extractors as se
 from spikeinterface.exporters import export_to_phy
 import spikeinterface.preprocessing as spre
 
-def extract_spikes(sorting_folder,results_folder, num_shanks:int, min_duration_secs: int = 300):  
+def extract_spikes(sorting_folder,results_folder, min_duration_secs: int = 300):  
     
     session_folder = Path(str(sorting_folder).split('_sorted')[0])
     scratch_folder = Path('/scratch')
@@ -46,6 +46,10 @@ def extract_spikes(sorting_folder,results_folder, num_shanks:int, min_duration_s
     WELCH_WIN_LENGTH_SAMPLES = 1024
 
     analyzer_mappings = []
+    num_shanks = 0
+    shank_glob = tuple(postprocessed_folder.glob('*group*'))
+    if shank_glob:
+        num_shanks = len(shank_glob)
 
     for idx, stream_name in enumerate(neuropix_streams):
 
@@ -105,6 +109,7 @@ def extract_spikes(sorting_folder,results_folder, num_shanks:int, min_duration_s
         quality_metrics = []
 
         cluster_offset = 0
+        peak_channel_offset = 0 # IBL gui uses cluster channels to index for multishank so think this is needed 
         for analyzer in analyzer_mappings:
             export_to_phy(analyzer, 
                         output_folder=phy_folder,
@@ -119,12 +124,14 @@ def extract_spikes(sorting_folder,results_folder, num_shanks:int, min_duration_s
 
             for unit_idx, unit_id in enumerate(analyzer.unit_ids):
                 waveform = templates[unit_idx,:,:]
-                peak_channel = np.argmax(np.max(waveform, 0) - np.min(waveform,0))
+                peak_channel = np.argmax(np.max(waveform, 0) - np.min(waveform,0)) + peak_channel_offset
                 peak_waveform = waveform[:,peak_channel]
                 peak_to_trough = (np.argmax(peak_waveform) - np.argmin(peak_waveform)) / 30000.
                 cluster_channels.append(peak_channel)
                 cluster_peak_to_trough.append(peak_to_trough)
                 cluster_waveforms.append(waveform)
+            
+            peak_channel_offset = np.max(cluster_channels) + 1
 
             print('Converting data...')
 
@@ -164,6 +171,7 @@ def extract_spikes(sorting_folder,results_folder, num_shanks:int, min_duration_s
         np.save(output_folder / "spikes.amps.npy", spike_amps)
         np.save(output_folder / "spikes.depths.npy", spike_depths_array)
         np.save(output_folder / "clusters.peakToTrough.npy", cluster_peak_to_trough)
+        np.save(output_folder / "clusters.channels.npy", cluster_channels)
 
         # for concatenating in case of different number of channels for multiple analyzers
         min_num_channels_waveforms = min([w.shape[1] for w in cluster_waveforms])
@@ -174,7 +182,7 @@ def extract_spikes(sorting_folder,results_folder, num_shanks:int, min_duration_s
 def _save_continous_metrics(recording: si.BaseRecording, output_folder: Path, channel_inds: np.ndarray,
                         RMS_WIN_LENGTH_SECS = 3,
                        WELCH_WIN_LENGTH_SAMPLES=2048,
-                       TOTAL_SECS = 100, is_lfp: bool = False):
+                       TOTAL_SECS = 100, is_lfp: bool = False, tag: str | None = None):
     rms_win_length_samples = 2 ** np.ceil(np.log2(recording.sampling_frequency * RMS_WIN_LENGTH_SECS))
     total_samples = int(np.min([recording.sampling_frequency * TOTAL_SECS, recording.get_num_samples()]))
 
@@ -218,11 +226,19 @@ def _save_continous_metrics(recording: si.BaseRecording, output_folder: Path, ch
     win['spectral_density'] = win['spectral_density'][:,channel_inds]
 
     if is_lfp:
-        alf_object_time = f'ephysTimeRmsLF'
-        alf_object_freq = f'ephysSpectralDensityLF'
+        if tag is not None:
+            alf_object_time = f'ephysTimeRmsLF{tag}'
+            alf_object_freq = f'ephysSpectralDensityLF{tag}'
+        else:
+            alf_object_time = f'ephysTimeRmsLF'
+            alf_object_freq = f'ephysSpectralDensityLF'
     else:
-        alf_object_time = f'ephysTimeRmsAP'
-        alf_object_freq = f'ephysSpectralDensityAP'
+        if tag is not None:
+            alf_object_time = f'ephysTimeRmsAP{tag}'
+            alf_object_freq = f'ephysSpectralDensityAP{tag}'
+        else:
+            alf_object_time = f'ephysTimeRmsAP'
+            alf_object_freq = f'ephysSpectralDensityAP'
 
     tdict = {'rms': win['TRMS'].astype(np.single), 'timestamps': win['tscale'].astype(np.single)}
     alfio.save_object_npy(output_folder, object=alf_object_time, dico=tdict, namespace='iblqc')
@@ -399,8 +415,11 @@ def extract_continuous(sorting_folder: Path,results_folder: Path, min_duration_s
                 recording_lfp = si.aggregate_channels(recording_list=recordings_removed)
 
             out_channel_ids = recording_lfp.channel_ids[out_channel_mask]
-            recording_lfp = spre.common_reference(recording_lfp, reference='global', ref_channel_ids=out_channel_ids.tolist())
+            if len(out_channel_ids) > 0:
+                recording_lfp = spre.common_reference(recording_lfp, reference='global', ref_channel_ids=out_channel_ids.tolist())
 
+        main_recording_lfp = spre.highpass_filter(si.aggregate_channels(recording_list=remove_overlapping_channels(main_recordings_lfp)))
+        main_recording_ap = spre.highpass_filter(si.aggregate_channels(recording_list=remove_overlapping_channels(main_recordings_sliced)))
         #good_channel_mask = np.isin(recording.channel_ids, analyzer.channel_ids)
         channel_inds = np.arange(recording_ap.get_num_channels())
 
@@ -408,6 +427,13 @@ def extract_continuous(sorting_folder: Path,results_folder: Path, min_duration_s
 
         _save_continous_metrics(recording_ap, output_folder, channel_inds)
         _save_continous_metrics(recording_lfp, output_folder, channel_inds, is_lfp=True)
+
+        # save for longer main recording
+        _save_continous_metrics(main_recording_lfp, output_folder, channel_inds=np.arange(main_recording_lfp.get_num_channels()),
+                                                         TOTAL_SECS=600, is_lfp=True, tag='Main')
+        _save_continous_metrics(main_recording_ap, output_folder, channel_inds=np.arange(main_recording_ap.get_num_channels()),
+                                TOTAL_SECS=600, tag='Main')
+
         # need appended channel locations so app can show surface recording locations also
         np.save(output_folder / 'channels.localCoordinates.npy', recording_ap.get_channel_locations())
         np.save(output_folder / 'channels.rawInd.npy', channel_inds)
