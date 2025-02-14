@@ -8,6 +8,9 @@ import ants
 import json
 
 from aind_mri_utils.measurement import find_line_eig
+from pathlib import Path
+from aind_mri_utils.file_io.neuroglancer import read_neuroglancer_annotation_layers
+from iblatlas import atlas
 
 def create_slicer_fcsv(filename,pts_mat,direction = 'LPS',pt_orientation = [0,0,0,1],pt_visibility = 1,pt_selected = 0, pt_locked = 1):
     """
@@ -233,3 +236,99 @@ def get_additional_channel_image_at_highest_level(image_path,
     ants_img.set_direction(ants_template.direction)
     ants_img.set_origin(ants_template.origin)
     return ants_img
+
+def save_image_volumes(zarr_read: ants.ANTsImage, ccf_25: ants.ANTsImage, ccf_annotation_25: ants.ANTsImage, 
+                       moved_image_folder: str, image_histology_results: str, manifest_df: pd.DataFrame) -> None:
+    """
+    Saves the volumes in image space and ccf space 
+    """
+    ccf_in_image_space = ants.apply_transforms(zarr_read,
+            ccf_25,
+            [os.path.join(moved_image_folder,'ls_to_template_SyN_0GenericAffine.mat'),
+                os.path.join(moved_image_folder,'ls_to_template_SyN_1InverseWarp.nii.gz'),
+                '/data/spim_template_to_ccf/syn_0GenericAffine.mat',
+                '/data/spim_template_to_ccf/syn_1InverseWarp.nii.gz',],
+            whichtoinvert=[True,False,True,False],)
+    ants.image_write(ccf_in_image_space,os.path.join(image_histology_results,f'ccf_in_{manifest_df.mouseid[0]}.nrrd'))
+
+    ccf_labels_in_image_space = ants.apply_transforms(zarr_read,
+                                        ccf_annotation_25,
+                                        [os.path.join(moved_image_folder,'ls_to_template_SyN_0GenericAffine.mat'),
+                                            os.path.join(moved_image_folder,'ls_to_template_SyN_1InverseWarp.nii.gz'),
+                                            '/data/spim_template_to_ccf/syn_0GenericAffine.mat',
+                                            '/data/spim_template_to_ccf/syn_1InverseWarp.nii.gz',],
+                                        whichtoinvert=[True,False,True,False],
+                                        interpolator='genericLabel')
+    ants.image_write(ccf_labels_in_image_space,os.path.join(image_histology_results,f'labels_in_{manifest_df.mouseid[0]}.nrrd'))
+
+def save_annotation_outputs(annotation_file_path: Path, row: pd.Series, extrema: list, offset: list, spim_results: str,
+                       moved_image_folder: str, template_results: str, ccf_results: str, brain_atlas: atlas.AllenAtlas,
+                       bregma_results: str, results_folder: Path, shank_id: int = 0) -> None:
+    """
+    Generates the slicer files and xyz json files in image space and ccf space needed by the IBL Gui
+    """ 
+    probe_data = read_neuroglancer_annotation_layers(annotation_file_path, layer_names = [row.probe_id])
+    this_probe_data = pd.DataFrame({'x':probe_data[row.probe_id][:,0],
+                                    'y':probe_data[row.probe_id][:,1],
+                                    'z':probe_data[row.probe_id][:,2]})
+    x = extrema[0]-this_probe_data.x.values*1e3+offset[0]
+    y  = this_probe_data.y.values*1e3+offset[1]
+    z = -this_probe_data.z.values*1e3+offset[2]
+
+    this_probe = np.vstack([x,y,z]).T
+    this_probe = order_annotation_pts(this_probe)
+    create_slicer_fcsv(os.path.join(spim_results,f'{row.probe_id}.fcsv'),this_probe,direction = 'LPS')
+
+    # Move probe into template space.
+    this_probe_df = pd.DataFrame({'x':this_probe[:,0],'y':this_probe[:,1],'z':this_probe[:,2]})
+    # Transform into template space
+    this_probe_template = ants.apply_transforms_to_points(3,this_probe_df,[os.path.join(moved_image_folder,'ls_to_template_SyN_0GenericAffine.mat'),
+                                                                            os.path.join(moved_image_folder,'ls_to_template_SyN_1InverseWarp.nii.gz')],
+                                                                        whichtoinvert=[True,False])
+    create_slicer_fcsv(os.path.join(template_results,f'{row.probe_id}.fcsv'),this_probe_template.values,direction = 'LPS')
+
+    # Move probe into ccf space
+    this_probe_ccf = ants.apply_transforms_to_points(3,this_probe_template,['/data/spim_template_to_ccf/syn_0GenericAffine.mat',
+                                                    '/data/spim_template_to_ccf/syn_1InverseWarp.nii.gz'],
+                                    whichtoinvert=[True,False])
+    create_slicer_fcsv(os.path.join(ccf_results,f'{row.probe_id}.fcsv'),this_probe_ccf.values,direction = 'LPS')
+
+    # Transform into ibl x-y-z-picks space
+    ccf_mlapdv = this_probe_ccf.values.copy()*1000
+    ccf_mlapdv[:,0] = -ccf_mlapdv[:,0]
+    ccf_mlapdv[:,1] = ccf_mlapdv[:,1]
+    ccf_mlapdv[:,2] = -ccf_mlapdv[:,2]
+    bregma_mlapdv = brain_atlas.ccf2xyz(ccf_mlapdv, ccf_order='mlapdv')*1000000
+
+    xyz_image_space = this_probe_data[['x', 'y', 'z']].to_numpy()
+    xyz_image_space[:, 0] = (extrema[0] - (xyz_image_space[:, 0] * 1000)) * 1000
+    xyz_image_space[:, 1] = xyz_image_space[:, 1] * 1000000
+    xyz_image_space[:, 2] = xyz_image_space[:, 2] * 1000000
+
+    xyz_picks_image_space = {'xyz_picks':xyz_image_space.tolist()}
+    xyz_picks_ccf = {'xyz_picks': bregma_mlapdv.tolist()}
+
+    # Save this in two locations. First, save sorted by filename
+    with open(os.path.join(bregma_results,f'{row.probe_id}_image_space.json'), "w") as f:
+        # Serialize data to JSON format and write to file
+        json.dump(xyz_picks_image_space, f)
+
+    with open(os.path.join(bregma_results,f'{row.probe_id}_ccf.json'), "w") as f:
+        # Serialize data to JSON format and write to file
+        json.dump(xyz_picks_ccf, f)
+
+    # Second, save the XYZ picks to the sorting folder for the gui.
+    # This step will be skipped if there was a problem with the ephys pipeline.
+    if os.path.isdir(os.path.join(results_folder,str(row.probe_name))):
+        if shank_id > 0:
+            image_space_filename = f'xyz_picks_shank{shank_id}_image_space.json'
+            ccf_space_filename = f'xyz_picks_shank{shank_id}.json'
+        else:
+            image_space_filename = 'xyz_picks_image_space.json'
+            ccf_space_filename = 'xyz_picks.json'
+
+        with open(os.path.join(results_folder,str(row.probe_name), image_space_filename),"w") as f:
+            json.dump(xyz_picks_image_space, f)
+        
+        with open(os.path.join(results_folder,str(row.probe_name), ccf_space_filename),"w") as f:
+            json.dump(xyz_picks_ccf, f)
