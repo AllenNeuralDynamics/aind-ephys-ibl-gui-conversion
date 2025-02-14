@@ -124,10 +124,10 @@ def extract_spikes(sorting_folder,results_folder, min_duration_secs: int = 300):
 
             for unit_idx, unit_id in enumerate(analyzer.unit_ids):
                 waveform = templates[unit_idx,:,:]
-                peak_channel = np.argmax(np.max(waveform, 0) - np.min(waveform,0)) + peak_channel_offset
+                peak_channel = np.argmax(np.max(waveform, 0) - np.min(waveform,0))
                 peak_waveform = waveform[:,peak_channel]
                 peak_to_trough = (np.argmax(peak_waveform) - np.argmin(peak_waveform)) / 30000.
-                cluster_channels.append(peak_channel)
+                cluster_channels.append(peak_channel + peak_channel_offset)
                 cluster_peak_to_trough.append(peak_to_trough)
                 cluster_waveforms.append(waveform)
             
