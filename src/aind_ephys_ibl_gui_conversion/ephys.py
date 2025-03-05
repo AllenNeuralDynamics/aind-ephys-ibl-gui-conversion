@@ -418,7 +418,7 @@ def extract_continuous(sorting_folder: Path,results_folder: Path, min_duration_s
             if len(out_channel_ids) > 0:
                 recording_lfp = spre.common_reference(recording_lfp, reference='global', ref_channel_ids=out_channel_ids.tolist())
 
-        max_samples = max([recording.get_num_samples() for recording in main_recordings_lfp])
+        max_samples = max([recording.get_num_samples() for recording in main_recordings[stream_name]])
         main_recording_lfp = spre.highpass_filter([recording for recording in main_recordings[stream_name] if recording.get_num_samples() == max_samples][0])
         main_recording_ap = spre.highpass_filter([recording for recording in main_recordings[stream_name.replace('LFP', 'AP')] if recording.get_num_samples() == max_samples][0])
         #good_channel_mask = np.isin(recording.channel_ids, analyzer.channel_ids)
