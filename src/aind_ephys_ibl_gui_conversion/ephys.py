@@ -346,7 +346,7 @@ def get_mappings(main_recordings: dict, recording_mappings: dict, neuropix_strea
     return main_recordings, recording_mappings
 
 def extract_continuous(sorting_folder: Path,results_folder: Path, min_duration_secs: int = 300,
-                       probe_surface_finding: Path| None = None):
+                       probe_surface_finding: Union[Path ,None] = None):
 
     session_folder = Path(str(sorting_folder).split('_sorted')[0])
 
