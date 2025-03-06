@@ -47,13 +47,15 @@ def extract_spikes(sorting_folder,results_folder, min_duration_secs: int = 300):
     WELCH_WIN_LENGTH_SAMPLES = 1024
 
     analyzer_mappings = []
-    num_shanks = 0
-    shank_glob = tuple(postprocessed_folder.glob('*group*'))
-    if shank_glob:
-        num_shanks = len(shank_glob)
 
     for idx, stream_name in enumerate(neuropix_streams):
+        num_shanks = 0
+        shank_glob = tuple(postprocessed_folder.glob(f'*{stream_name}*group*'))
+        if shank_glob:
+            num_shanks = len(shank_glob)
 
+        print('Number of shanks', num_shanks)
+        
         if '-LFP' in stream_name:
             continue
 
