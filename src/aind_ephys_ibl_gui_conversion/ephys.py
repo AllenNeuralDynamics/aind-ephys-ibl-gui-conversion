@@ -1,4 +1,4 @@
-from __future__ import annotations
+from typing import Union
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -183,7 +183,7 @@ def extract_spikes(sorting_folder,results_folder, min_duration_secs: int = 300):
 def _save_continous_metrics(recording: si.BaseRecording, output_folder: Path, channel_inds: np.ndarray,
                         RMS_WIN_LENGTH_SECS = 3,
                        WELCH_WIN_LENGTH_SAMPLES=2048,
-                       TOTAL_SECS = 100, is_lfp: bool = False, tag: str | None = None):
+                       TOTAL_SECS = 100, is_lfp: bool = False, tag: Union[str, None] = None):
     rms_win_length_samples = 2 ** np.ceil(np.log2(recording.sampling_frequency * RMS_WIN_LENGTH_SECS))
     total_samples = int(np.min([recording.sampling_frequency * TOTAL_SECS, recording.get_num_samples()]))
 
