@@ -135,6 +135,7 @@ def extract_spikes(sorting_folder,results_folder, min_duration_secs: int = 300):
                 cluster_channels.append(peak_channel)
                 cluster_peak_to_trough.append(peak_to_trough)
                 cluster_waveforms.append(waveform)
+                shank_indices.append(index)
 
             print('Converting data...')
 
@@ -142,7 +143,6 @@ def extract_spikes(sorting_folder,results_folder, min_duration_secs: int = 300):
             #current_clusters = current_clusters + cluster_offset
             #cluster_offset =  np.max(current_clusters) + 1
             clusters.append(current_clusters)
-            shank_indices.append(index)
             
             spike_samples.append(np.load(phy_folder / "spike_times.npy"))
             amps.append(np.load(phy_folder / "amplitudes.npy"))
