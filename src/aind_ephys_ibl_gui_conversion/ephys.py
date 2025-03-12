@@ -55,7 +55,7 @@ def extract_spikes(sorting_folder,results_folder, min_duration_secs: int = 300):
             num_shanks = len(shank_glob)
 
         print('Number of shanks', num_shanks)
-        
+
         if '-LFP' in stream_name:
             continue
 
@@ -103,6 +103,7 @@ def extract_spikes(sorting_folder,results_folder, min_duration_secs: int = 300):
         clusters = []
         spike_samples = []
         amps = []
+        shank_indices = []
         # save templates
         cluster_channels = []
         cluster_peak_to_trough = []
@@ -110,10 +111,11 @@ def extract_spikes(sorting_folder,results_folder, min_duration_secs: int = 300):
 
         templates = []
         quality_metrics = []
+        
 
         cluster_offset = 0
         peak_channel_offset = 0 # IBL gui uses cluster channels to index for multishank so think this is needed 
-        for analyzer in analyzer_mappings:
+        for index, analyzer in enumerate(analyzer_mappings):
             export_to_phy(analyzer, 
                         output_folder=phy_folder,
                         compute_pc_features=False,
@@ -130,18 +132,17 @@ def extract_spikes(sorting_folder,results_folder, min_duration_secs: int = 300):
                 peak_channel = np.argmax(np.max(waveform, 0) - np.min(waveform,0))
                 peak_waveform = waveform[:,peak_channel]
                 peak_to_trough = (np.argmax(peak_waveform) - np.argmin(peak_waveform)) / 30000.
-                cluster_channels.append(peak_channel + peak_channel_offset)
+                cluster_channels.append(peak_channel)
                 cluster_peak_to_trough.append(peak_to_trough)
                 cluster_waveforms.append(waveform)
-            
-            peak_channel_offset = np.max(cluster_channels) + 1
 
             print('Converting data...')
 
             current_clusters = np.load(phy_folder / "spike_clusters.npy")
-            current_clusters = current_clusters + cluster_offset
-            cluster_offset =  np.max(current_clusters) + 1
+            #current_clusters = current_clusters + cluster_offset
+            #cluster_offset =  np.max(current_clusters) + 1
             clusters.append(current_clusters)
+            shank_indices.append(shank_index)
             
             spike_samples.append(np.load(phy_folder / "spike_times.npy"))
             amps.append(np.load(phy_folder / "amplitudes.npy"))
@@ -175,6 +176,8 @@ def extract_spikes(sorting_folder,results_folder, min_duration_secs: int = 300):
         np.save(output_folder / "spikes.depths.npy", spike_depths_array)
         np.save(output_folder / "clusters.peakToTrough.npy", cluster_peak_to_trough)
         np.save(output_folder / "clusters.channels.npy", cluster_channels)
+        assert len(spike_clusters) == len(shank_indices)
+        np.save(output_folder / "spike_shank_indices.npy", shank_indices)
 
         # for concatenating in case of different number of channels for multiple analyzers
         min_num_channels_waveforms = min([w.shape[1] for w in cluster_waveforms])
