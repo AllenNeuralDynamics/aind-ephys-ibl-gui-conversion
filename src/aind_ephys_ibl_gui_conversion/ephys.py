@@ -351,7 +351,7 @@ def get_mappings(main_recordings: dict, recording_mappings: dict, neuropix_strea
     return main_recordings, recording_mappings
 
 def extract_continuous(sorting_folder: Path,results_folder: Path, min_duration_secs: int = 300,
-                       probe_surface_finding: Union[Path ,None] = None):
+                       probe_surface_finding: Union[Path ,None] = None, use_lfp_cmr: bool = False):
 
     session_folder = Path(str(sorting_folder).split('_sorted')[0])
 
@@ -399,9 +399,10 @@ def extract_continuous(sorting_folder: Path,results_folder: Path, min_duration_s
         if not output_folder.exists():
             output_folder.mkdir()
 
-        recording_highpass = spre.highpass_filter(recording_ap)
-        _, channel_labels = spre.detect_bad_channels(recording_highpass)
-        out_channel_mask = channel_labels == "out" # TODO: might not work, or adjust threshold, load preprocessed recording
+        if use_lfp_cmr:
+            recording_highpass = spre.highpass_filter(recording_ap)
+            _, channel_labels = spre.detect_bad_channels(recording_highpass)
+            out_channel_mask = channel_labels == "out" # TODO: might not work, or adjust threshold, load preprocessed recording
 
         if stream_name.replace('AP', 'LFP') in main_recordings:
             stream_name = stream_name.replace('AP', 'LFP')
@@ -419,10 +420,11 @@ def extract_continuous(sorting_folder: Path,results_folder: Path, min_duration_s
 
                 recordings_removed = remove_overlapping_channels(main_recordings_lfp)
                 recording_lfp = si.aggregate_channels(recording_list=recordings_removed)
-
-            out_channel_ids = recording_lfp.channel_ids[out_channel_mask]
-            if len(out_channel_ids) > 0:
-                recording_lfp = spre.common_reference(recording_lfp, reference='global', ref_channel_ids=out_channel_ids.tolist())
+                
+            if use_lfp_cmr:
+                out_channel_ids = recording_lfp.channel_ids[out_channel_mask]
+                if len(out_channel_ids) > 0:
+                    recording_lfp = spre.common_reference(recording_lfp, reference='global', ref_channel_ids=out_channel_ids.tolist())
 
         max_samples = max([recording.get_num_samples() for recording in main_recordings[stream_name]])
         main_recording_lfp = spre.highpass_filter([recording for recording in main_recordings[stream_name] if recording.get_num_samples() == max_samples][0])
