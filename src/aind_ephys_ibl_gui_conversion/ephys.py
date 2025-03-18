@@ -106,6 +106,7 @@ def extract_spikes(sorting_folder,results_folder, min_duration_secs: int = 300):
         shank_indices = []
         # save templates
         cluster_channels = []
+        unit_shank_indices = []
         cluster_peak_to_trough = []
         cluster_waveforms = []
 
@@ -133,6 +134,7 @@ def extract_spikes(sorting_folder,results_folder, min_duration_secs: int = 300):
                 peak_waveform = waveform[:,peak_channel]
                 peak_to_trough = (np.argmax(peak_waveform) - np.argmin(peak_waveform)) / 30000.
                 cluster_channels.append(peak_channel)
+                unit_shank_indices.append(index)
                 cluster_peak_to_trough.append(peak_to_trough)
                 cluster_waveforms.append(waveform)
 
@@ -179,7 +181,9 @@ def extract_spikes(sorting_folder,results_folder, min_duration_secs: int = 300):
         np.save(output_folder / "clusters.peakToTrough.npy", cluster_peak_to_trough)
         np.save(output_folder / "clusters.channels.npy", cluster_channels)
         assert len(spike_clusters) == len(shank_indices)
+        assert len(cluster_channels) == len(unit_shank_indices)
         np.save(output_folder / "spike_shank_indices.npy", shank_indices)
+        np.save(output_folder / "unit_shank_indices.npy", unit_shank_indices)
 
         # for concatenating in case of different number of channels for multiple analyzers
         min_num_channels_waveforms = min([w.shape[1] for w in cluster_waveforms])
