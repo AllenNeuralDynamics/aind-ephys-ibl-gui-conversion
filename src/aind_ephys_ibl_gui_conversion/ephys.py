@@ -46,9 +46,8 @@ def extract_spikes(sorting_folder,results_folder, min_duration_secs: int = 300):
     RMS_WIN_LENGTH_SECS = 3
     WELCH_WIN_LENGTH_SAMPLES = 1024
 
-    analyzer_mappings = []
-
     for idx, stream_name in enumerate(neuropix_streams):
+        analyzer_mappings = []
         num_shanks = 0
         shank_glob = tuple(postprocessed_folder.glob(f'*{stream_name}*group*'))
         if shank_glob:
