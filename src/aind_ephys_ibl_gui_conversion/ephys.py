@@ -1,9 +1,8 @@
 from typing import Union
+import logging
 import numpy as np
 import pandas as pd
 from pathlib import Path
-import shutil
-import glob
 from tqdm import tqdm
 
 
@@ -11,13 +10,19 @@ from scipy import signal
 import one.alf.io as alfio
 from .utils import WindowGenerator, fscale, hp, rms
 
-
-
-
 import spikeinterface as si
 import spikeinterface.extractors as se
 from spikeinterface.exporters import export_to_phy
 import spikeinterface.preprocessing as spre
+
+# here we define some constants used for defining if timestamps are ok
+# or should be skipped
+ACCEPTED_NEGATIVE_DEVIATION_MS = 0.2  # we allow for small negative timestamps diff glitches
+MAX_NUM_NEGATIVE_TIMESTAMPS = 10  # maximum number of negative timestamps allowed below the accepted deviation
+ABS_MAX_TIMESTAMPS_DEVIATION_MS = 2  # absolute maximum deviation allowed for timestamps (also positive)
+
+MAX_NUM_NEGATIVE_TIMESTAMPS = 10
+MAX_TIMESTAMPS_DEVIATION_MS = 1
 
 def extract_spikes(sorting_folder,results_folder, min_duration_secs: int = 300):
     """
@@ -440,6 +445,51 @@ def get_ecephys_stream_names(base_folder: Path) -> tuple[list[str], Path, int]:
 
     return neuropix_streams, ecephys_compressed_folder, num_blocks
 
+def _reset_recordings(recording: si.BaseRecording, recording_name: str) -> None:
+    """
+    Resets the timestamps of the recording if certain conditions are met.
+
+    This function checks the timestamp differences within the recording for potential issues. 
+    If the following conditions are encountered:
+    1. The number of negative timestamp differences exceeds the threshold (`MAX_NUM_NEGATIVE_TIMESTAMPS`).
+    2. The maximum absolute time difference between timestamps exceeds the threshold (`ABS_MAX_TIMESTAMPS_DEVIATION_MS`).
+
+    If either condition is true, the recording's timestamps are reset, and a message is logged indicating the issue.
+    
+    Parameters:
+    ----------
+    recording : si.BaseRecording
+        The recording object containing timestamp data to be checked.
+        
+    recording_name : str
+        The name of the recording, used for logging purposes.
+    """
+    
+    # timestamps should be monotonically increasing, but we allow for small glitches
+    skip_times = False
+    for segment_index in range(recording.get_num_segments()):
+        times = recording.get_times(segment_index=segment_index)
+        times_diff_ms = np.diff(times) * 1000
+        num_negative_times = np.sum(times_diff_ms < -ACCEPTED_NEGATIVE_DEVIATION_MS)
+
+        if num_negative_times > MAX_NUM_NEGATIVE_TIMESTAMPS:
+            logging.info(
+                f"\t{recording_name}:\n\t\tSkipping timestamps for too many negative "
+                f"timestamps diffs below {ACCEPTED_NEGATIVE_DEVIATION_MS}: {num_negative_times}"
+            )
+            skip_times = True
+            break
+        max_time_diff_ms = np.max(np.abs(times_diff_ms))
+        if max_time_diff_ms > ABS_MAX_TIMESTAMPS_DEVIATION_MS:
+            logging.info(
+                f"\t{recording_name}:\n\t\tSkipping timestamps for too large time diff deviation: {max_time_diff_ms} ms"
+            )
+            skip_times = True
+            break
+
+    if skip_times:
+        recording.reset_times()
+
 def get_mappings(main_recordings: dict, recording_mappings: dict, neuropix_streams: list, num_blocks: int,
                  ecephys_compressed_folder: Path, min_duration_secs: int = 300) -> tuple[dict, dict]:
     """
@@ -533,6 +583,7 @@ def get_mappings(main_recordings: dict, recording_mappings: dict, neuropix_strea
                 else:
                     key = stream_name
 
+                _reset_recordings(recording_group, key)
                 if recording_group.get_total_duration() < min_duration_secs:
                     if key not in recording_mappings:
                         recording_mappings[key] = [recording_group]
@@ -547,6 +598,7 @@ def get_mappings(main_recordings: dict, recording_mappings: dict, neuropix_strea
                 if has_lfp:
                     key = key.replace('AP', 'LFP')
 
+                    _reset_recordings(recording_groups_lfp[group], key)
                     if recording_groups_lfp[group].get_total_duration() < min_duration_secs:
                         if key not in recording_mappings:
                             recording_mappings[key] = [recording_groups_lfp[group]]
