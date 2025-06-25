@@ -464,8 +464,9 @@ def remove_overlapping_channels(recordings) -> list[si.BaseRecording]:
                 channel_id
                 for channel_id in recording.channel_ids
                 if str(index + 1) in channel_id
-            ][0]
-            channel_ids_to_remove.append(channel_id_remove)
+            ]
+            if channel_id_remove:
+                channel_ids_to_remove.append(channel_id_remove[0])
 
         removed_recordings.append(
             recording.remove_channels(channel_ids_to_remove)
