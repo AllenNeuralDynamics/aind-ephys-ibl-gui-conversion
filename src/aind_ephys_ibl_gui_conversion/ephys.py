@@ -857,6 +857,9 @@ def extract_continuous(
 
             total_recordings = main_recordings_sliced + recordings_sliced
             recordings_removed = remove_overlapping_channels(total_recordings)
+            for recording in recordings_removed:
+                recording.reset_times()
+
             recording_ap = si.aggregate_channels(
                 recording_list=recordings_removed
             )
@@ -877,6 +880,9 @@ def extract_continuous(
             recordings_removed = remove_overlapping_channels(
                 main_recordings_sliced
             )
+            for recording in recordings_removed:
+                recording.reset_times()
+
             recording_ap = si.aggregate_channels(
                 recording_list=recordings_removed
             )
@@ -921,6 +927,9 @@ def extract_continuous(
                 recordings_removed = remove_overlapping_channels(
                     total_recordings
                 )
+                for recording in recordings_removed:
+                    recording.reset_times()
+
                 recording_lfp = si.aggregate_channels(
                     recording_list=recordings_removed
                 )
@@ -941,6 +950,9 @@ def extract_continuous(
                 recordings_removed = remove_overlapping_channels(
                     main_recordings_lfp
                 )
+                for recording in recordings_removed:
+                    recording.reset_times()
+                    
                 recording_lfp = si.aggregate_channels(
                     recording_list=recordings_removed
                 )
