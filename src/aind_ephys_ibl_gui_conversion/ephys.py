@@ -118,9 +118,17 @@ def extract_spikes(
                 if analyzer_folder.is_dir():
                     analyzer = si.load_sorting_analyzer(analyzer_folder)
                 else:
-                    analyzer = si.load_sorting_analyzer_or_waveforms(
+                    analyzer_folder = (
                         postprocessed_folder
                         / f"experiment1_{stream_name}_recording1_group{shank_index}"
+                    )
+                    if not analyzer_folder.exists():
+                        with open(output_folder / "sorting_error.txt", "w") as f:
+                            f.write(f"No postprocessed sorting output found for {probe_name}")
+                        continue
+
+                    analyzer = si.load_sorting_analyzer_or_waveforms(
+                        analyzer_folder
                     )
 
                 if analyzer.get_total_duration() < min_duration_secs:
@@ -135,9 +143,17 @@ def extract_spikes(
             if analyzer_folder.is_dir():
                 analyzer = si.load_sorting_analyzer(analyzer_folder)
             else:
-                analyzer = si.load_sorting_analyzer_or_waveforms(
+                analyzer_folder = (
                     postprocessed_folder
                     / f"experiment1_{stream_name}_recording1"
+                )
+                if not analyzer_folder.exists():
+                    with open(output_folder / "sorting_error.txt", "w") as f:
+                        f.write(f"No postprocessed sorting output found for {probe_name}")
+                    continue
+                
+                analyzer = si.load_sorting_analyzer_or_waveforms(
+                    analyzer_folder
                 )
             analyzer_mappings.append(analyzer)
 
