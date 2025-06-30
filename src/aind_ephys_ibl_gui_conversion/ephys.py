@@ -123,8 +123,12 @@ def extract_spikes(
                         / f"experiment1_{stream_name}_recording1_group{shank_index}"
                     )
                     if not analyzer_folder.exists():
-                        with open(output_folder / "sorting_error.txt", "w") as f:
-                            f.write(f"No postprocessed sorting output found for {probe_name}")
+                        with open(
+                            output_folder / "sorting_error.txt", "w"
+                        ) as f:
+                            f.write(
+                                f"No postprocessed sorting output found for {probe_name}"
+                            )
                         continue
 
                     analyzer = si.load_sorting_analyzer_or_waveforms(
@@ -149,9 +153,11 @@ def extract_spikes(
                 )
                 if not analyzer_folder.exists():
                     with open(output_folder / "sorting_error.txt", "w") as f:
-                        f.write(f"No postprocessed sorting output found for {probe_name}")
+                        f.write(
+                            f"No postprocessed sorting output found for {probe_name}"
+                        )
                     continue
-                
+
                 analyzer = si.load_sorting_analyzer_or_waveforms(
                     analyzer_folder
                 )
@@ -963,7 +969,7 @@ def extract_continuous(
                 )
                 for recording in recordings_removed:
                     recording.reset_times()
-                    
+
                 recording_lfp = si.aggregate_channels(
                     recording_list=recordings_removed
                 )
