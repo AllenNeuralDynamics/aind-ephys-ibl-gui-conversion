@@ -19,7 +19,8 @@ from .utils import WindowGenerator, fscale, hp, rms
 ACCEPTED_NEGATIVE_DEVIATION_MS = (
     0.2  # we allow for small negative timestamps diff glitches
 )
-MAX_NUM_NEGATIVE_TIMESTAMPS = 10  # maximum number of negative timestamps allowed below the accepted deviation
+# maximum number of negative timestamps allowed below the accepted deviation
+MAX_NUM_NEGATIVE_TIMESTAMPS = 10
 ABS_MAX_TIMESTAMPS_DEVIATION_MS = (
     2  # absolute maximum deviation allowed for timestamps (also positive)
 )
@@ -71,7 +72,6 @@ def extract_spikes(
     print(f"ecephys folder: {ecephys_folder}")
     print(f"ecephys compressed folder: {ecephys_compressed_folder}")
 
-    sorting_curated_folder = sorting_folder / "sorting_precurated"
     postprocessed_folder = sorting_folder / "postprocessed"
 
     # extract stream names
@@ -83,8 +83,6 @@ def extract_spikes(
     neuropix_streams = [s for s in stream_names if "Neuropix" in s]
     probe_names = [s.split(".")[1].split("-")[0] for s in neuropix_streams]
 
-    RMS_WIN_LENGTH_SECS = 3
-    WELCH_WIN_LENGTH_SAMPLES = 1024
 
     for idx, stream_name in enumerate(neuropix_streams):
         analyzer_mappings = []
@@ -123,8 +121,12 @@ def extract_spikes(
                         / f"experiment1_{stream_name}_recording1_group{shank_index}"
                     )
                     if not analyzer_folder.exists():
-                        with open(output_folder / "sorting_error.txt", "w") as f:
-                            f.write(f"No postprocessed sorting output found for {probe_name}")
+                        with open(
+                            output_folder / "sorting_error.txt", "w"
+                        ) as f:
+                            f.write(
+                                f"No postprocessed sorting output found for {probe_name}"
+                            )
                         continue
 
                     analyzer = si.load_sorting_analyzer_or_waveforms(
@@ -149,9 +151,11 @@ def extract_spikes(
                 )
                 if not analyzer_folder.exists():
                     with open(output_folder / "sorting_error.txt", "w") as f:
-                        f.write(f"No postprocessed sorting output found for {probe_name}")
+                        f.write(
+                            f"No postprocessed sorting output found for {probe_name}"
+                        )
                     continue
-                
+
                 analyzer = si.load_sorting_analyzer_or_waveforms(
                     analyzer_folder
                 )
@@ -175,8 +179,6 @@ def extract_spikes(
         templates = []
         quality_metrics = []
 
-        cluster_offset = 0
-        peak_channel_offset = 0  # IBL gui uses cluster channels to index for multishank so think this is needed
         for index, analyzer in enumerate(analyzer_mappings):
             export_to_phy(
                 analyzer,
@@ -399,15 +401,15 @@ def _save_continous_metrics(
             alf_object_time = f"ephysTimeRmsLF{tag}"
             alf_object_freq = f"ephysSpectralDensityLF{tag}"
         else:
-            alf_object_time = f"ephysTimeRmsLF"
-            alf_object_freq = f"ephysSpectralDensityLF"
+            alf_object_time = "ephysTimeRmsLF"
+            alf_object_freq = "ephysSpectralDensityLF"
     else:
         if tag is not None:
             alf_object_time = f"ephysTimeRmsAP{tag}"
             alf_object_freq = f"ephysSpectralDensityAP{tag}"
         else:
-            alf_object_time = f"ephysTimeRmsAP"
-            alf_object_freq = f"ephysSpectralDensityAP"
+            alf_object_time = "ephysTimeRmsAP"
+            alf_object_freq = "ephysSpectralDensityAP"
 
     tdict = {
         "rms": win["TRMS"].astype(np.single),
@@ -476,13 +478,7 @@ def remove_overlapping_channels(recordings) -> list[si.BaseRecording]:
 
         channel_ids_to_remove = []
         for index in remove_indices:
-            channel_id_remove = [
-                channel_id
-                for channel_id in recording.channel_ids
-                if str(index + 1) in channel_id
-            ]
-            if channel_id_remove:
-                channel_ids_to_remove.append(channel_id_remove[0])
+            channel_ids_to_remove.append(recording.channel_ids[index])
 
         removed_recordings.append(
             recording.remove_channels(channel_ids_to_remove)
@@ -548,7 +544,6 @@ def get_ecephys_stream_names(base_folder: Path) -> tuple[list[str], Path, int]:
     num_blocks = se.get_neo_num_blocks("openephysbinary", ecephys_folder)
 
     neuropix_streams = [s for s in stream_names if "Neuropix" in s]
-    probe_names = [s.split(".")[1].split("-")[0] for s in neuropix_streams]
 
     return neuropix_streams, ecephys_compressed_folder, num_blocks
 
@@ -969,7 +964,7 @@ def extract_continuous(
                 )
                 for recording in recordings_removed:
                     recording.reset_times()
-                    
+
                 recording_lfp = si.aggregate_channels(
                     recording_list=recordings_removed
                 )
