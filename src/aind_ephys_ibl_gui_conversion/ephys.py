@@ -230,7 +230,15 @@ def extract_spikes(
 
             qm_data.index.name = "cluster_id"
             qm_data["cluster_id.1"] = qm_data.index.values
+            if "default_qc" in analyzer.sorting.get_property_keys():
+                qm_data["default_qc"] = analyzer.sorting.get_property("default_qc")
+
+            if "decoder_label" in analyzer.sorting.get_property_keys()  or "unitrefine_label" in analyzer.sorting.get_property_keys():
+                qm_data["unitrefine_label"] = analyzer.sorting.get_property("decoder_label")
+
             quality_metrics.append(qm_data)
+
+
 
         if len(analyzer_mappings) == 1:
             spike_clusters = np.squeeze(clusters[0].astype("uint32"))
