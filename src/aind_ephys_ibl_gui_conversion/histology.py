@@ -110,6 +110,9 @@ def projected_onto_line(points, line_N, line_P):
 
 
 def order_annotation_pts(points, axis=2, order="desending"):
+    """
+    Orders the annotation points
+    """
     N, pt = find_line_eig(points)
     proj = projected_onto_line(points, N, pt)
     this_order = np.argsort(proj[:, 2])
@@ -224,6 +227,9 @@ def check_orientation(img: np.array, params: dict, orientations: dict):
 
 
 def get_highest_level_info(filepath, return_order="xyz"):
+    """
+    Gets the highest level information
+    """
 
     with open(os.path.join(filepath, ".zattrs")) as f:
         metadata = json.load(f)
@@ -254,6 +260,9 @@ def get_additional_channel_image_at_highest_level(
     },
     scale_factor=1e-3,
 ):
+    """
+    Gets the additional channel image
+    """
     highest_level, scale = get_highest_level_info(image_path)
     img_array = __read_zarr_image(os.path.join(image_path, highest_level))
     img_array = img_array.astype(np.double)
