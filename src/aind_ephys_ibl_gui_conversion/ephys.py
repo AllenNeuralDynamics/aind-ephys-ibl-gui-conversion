@@ -93,7 +93,6 @@ def extract_spikes(  # noqa: C901
     neuropix_streams = [s for s in stream_names if "Neuropix" in s]
     probe_names = [s.split(".")[1].split("-")[0] for s in neuropix_streams]
 
-
     for idx, stream_name in enumerate(neuropix_streams):
         analyzer_mappings = []
         num_shanks = 0
