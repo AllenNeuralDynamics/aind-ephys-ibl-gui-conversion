@@ -1,6 +1,7 @@
 """
 Functions to process ephys data
 """
+
 import logging
 from pathlib import Path
 from typing import Union
@@ -250,8 +251,13 @@ def extract_spikes(  # noqa: C901
                 "decoder_label" in analyzer.sorting.get_property_keys()
                 or "unitrefine_label" in analyzer.sorting.get_property_keys()
             ):
-                qm_data["unitrefine_label"] = analyzer.sorting.get_property(
+                unitrefine_column_name = (
                     "decoder_label"
+                    if "decoder_label" in analyzer.sorting.get_property_keys()
+                    else "unitrefine_label"
+                )
+                qm_data["unitrefine_label"] = analyzer.sorting.get_property(
+                    unitrefine_column_name
                 )
 
             quality_metrics.append(qm_data)
@@ -921,9 +927,7 @@ def extract_continuous(  # noqa: C901
     )
     # recording is a seperate asset,
     # identified by probe_surface_finding
-    neuropix_streams_surface = (
-        []
-    )
+    neuropix_streams_surface = []
     if probe_surface_finding is not None:
         (
             neuropix_streams_surface,
@@ -1020,9 +1024,7 @@ def extract_continuous(  # noqa: C901
             _, channel_labels = spre.detect_bad_channels(recording_highpass)
             # TODO: might not work, or adjust threshold,
             # load preprocessed recording
-            out_channel_mask = (
-                channel_labels == "out"
-            )
+            out_channel_mask = channel_labels == "out"
 
         if stream_name.replace("AP", "LFP") in main_recordings:
             stream_name = stream_name.replace("AP", "LFP")
