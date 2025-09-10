@@ -8,6 +8,7 @@ from tqdm import tqdm
 from scipy import signal
 import one.alf.io as alfio
 from .utils import WindowGenerator, fscale, hp, rms
+import one.alf.io as alfio
 
 
 
