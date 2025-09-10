@@ -892,6 +892,56 @@ def get_mappings(  # noqa: C901
 
 
 def extract_continuous(
+    recording_folder: Union[str, Path],
+    results_folder: Union[str, Path],
+    total_secs: int = 100,
+    rms_win_length_secs: Union[int, float] = 3,
+    welch_win_length_samples: int = 2048,
+    is_lfp_predicate: Optional[callable] = None,
+    channel_selection: Optional[Mapping[str, Sequence[int]]] = None,
+    cache_root: Union[str, Path] = "/scratch",
+    tag_by_name: Optional[Mapping[str, str]] = None,
+    save_channels_metadata: bool = True,
+) -> None:
+    """
+    Drop-in replacement that accepts a folder path (like your original).
+    - Auto-detects Open Ephys/Neo streams in `recording_folder`
+    - Builds Recording objects per stream
+    - Caches each to /scratch/<auto-name>/ (by default)
+    - Computes continuous metrics + writes channels.* artifacts
+    """
+    recording_folder = Path(recording_folder)
+    results_folder = Path(results_folder)
+
+    # Discover streams exactly like your original style:
+    # (your code used se.get_neo_streams("openephysbinary", <folder>))
+    stream_names, stream_ids = se.get_neo_streams("openephysbinary", recording_folder)
+
+    # Build a dict of recordings {stream_name: Recording}
+    recordings_by_name = {}
+    for name, sid in zip(stream_names, stream_ids):
+        # Prefer the modern reader if present, else fall back
+        try:
+            rec = si.read_openephys(recording_folder, stream_id=sid)
+        except Exception:
+            rec = se.read_openephys(recording_folder, stream_id=sid)
+        recordings_by_name[name] = rec
+
+    # Hand off to the fast, dict-based core
+    _extract_continuous_from_dict(
+        recordings_by_name=recordings_by_name,
+        results_folder=results_folder,
+        total_secs=total_secs,
+        rms_win_length_secs=rms_win_length_secs,
+        welch_win_length_samples=welch_win_length_samples,
+        is_lfp_predicate=is_lfp_predicate,
+        channel_selection=channel_selection,
+        cache_root=cache_root,
+        tag_by_name=tag_by_name,
+        save_channels_metadata=save_channels_metadata,
+    )
+
+def _extract_continuous_from_dict(
     recordings_by_name: Mapping[str, si.BaseRecording],
     results_folder: Union[str, Path],
     total_secs: int = 100,
@@ -904,42 +954,39 @@ def extract_continuous(
     save_channels_metadata: bool = True,
 ) -> None:
     """
-    Compute & save continuous metrics (RMS time series + Welch PSD) for 1+ recordings,
-    with per-recording caching under /scratch by default, and restored channels.* saves.
-
-    recordings_by_name : {stream_name -> Recording}
-    results_folder     : outputs under <results_folder>/<stream_name>/
+    Core implementation (expects a dict of {stream_name: Recording}).
+    Uses the caching + fast metrics + channels.* writers we added earlier.
     """
     results_folder = Path(results_folder)
     results_folder.mkdir(parents=True, exist_ok=True)
 
     if is_lfp_predicate is None:
         def _default_is_lfp(name: str) -> bool:
-            return "lfp" in str(name).lower()
+            return "lfp" in str(name).lower() or "-lfp" in str(name).lower()
         is_lfp_predicate = _default_is_lfp
 
     for stream_name, rec in recordings_by_name.items():
-        # 1) per-recording cache under /scratch/<auto-name>/
+        # Per-recording cache under /scratch/<auto-name>/
         auto_name = _recording_fingerprint(rec, name_hint=stream_name)
         cache_dir = Path(cache_root) / auto_name
         rec_cached = _cache_or_load_binary(rec, cache_dir)
 
-        # 2) per-stream output directory
+        # Per-stream output directory
         out_dir = results_folder / _sanitize_name(stream_name)
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        # 3) optional channel selection
+        # Channel selection (default: all)
         if channel_selection is not None and stream_name in channel_selection:
             ch_inds = np.asarray(list(channel_selection[stream_name]), dtype=int)
         else:
             ch_inds = np.arange(rec_cached.get_num_channels(), dtype=int)
 
-        # 4) optional tag for ALF object names
+        # Optional ALF tag
         tag = None
         if tag_by_name is not None and stream_name in tag_by_name:
             tag = str(tag_by_name[stream_name])
 
-        # 5) metrics
+        # Metrics
         _save_continous_metrics(
             recording=rec_cached,
             output_folder=out_dir,
@@ -951,6 +998,6 @@ def extract_continuous(
             tag=tag,
         )
 
-        # 6) channel metadata (restored)
+        # channels.* artifacts
         if save_channels_metadata:
             _save_channel_metadata(rec_cached, out_dir)
