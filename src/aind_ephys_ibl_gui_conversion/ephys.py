@@ -20,7 +20,6 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Mapping, Optional, Sequence, Union
-from one.alf import alfio
 
 from .utils import WindowGenerator, fscale, hp, rms
 
