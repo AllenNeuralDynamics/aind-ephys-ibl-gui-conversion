@@ -16,6 +16,12 @@ from scipy import signal
 from spikeinterface.exporters import export_to_phy
 from tqdm import tqdm
 
+import hashlib
+import json
+from pathlib import Path
+from typing import Mapping, Optional, Sequence, Union
+from one.alf import alfio
+
 from .utils import WindowGenerator, fscale, hp, rms
 
 # here we define some constants used for defining if timestamps are ok
@@ -32,6 +38,76 @@ ABS_MAX_TIMESTAMPS_DEVIATION_MS = (
 MAX_NUM_NEGATIVE_TIMESTAMPS = 10
 MAX_TIMESTAMPS_DEVIATION_MS = 1
 
+# ChatGPT Helper functions
+
+def _sanitize_name(s: str, maxlen: int = 64) -> str:
+    """Make a filesystem-safe name using only [A-Za-z0-9._-+] and trim length."""
+    out = []
+    for ch in str(s):
+        if ch.isalnum():
+            out.append(ch)
+        elif ch in "._-+":
+            out.append(ch)
+        else:
+            out.append("_")
+    out = "".join(out).strip("._-")
+    out = out[:maxlen]
+    return out or "rec"
+
+
+def _recording_fingerprint(recording: si.BaseRecording, name_hint: str = "") -> str:
+    """
+    Build a short, stable-ish cache name for a recording.
+
+    Uses: stream name hint, (#ch, fs, #samples), and channel id samples -> sha1[:8].
+    """
+    try:
+        n_ch = int(recording.get_num_channels())
+        fs = float(recording.sampling_frequency)
+        n_samp = int(recording.get_num_samples())
+        ch_ids = list(map(str, recording.channel_ids))
+    except Exception:
+        n_ch, fs, n_samp, ch_ids = -1, -1.0, -1, []
+
+    payload = {
+        "hint": str(name_hint),
+        "n_ch": n_ch,
+        "fs": fs,
+        "n_samp": n_samp,
+        "ch_ids_head": ch_ids[:8],
+        "ch_ids_tail": ch_ids[-8:] if ch_ids else [],
+    }
+    h = hashlib.sha1(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+    base = "{}_{}ch_{}Hz_{}n_{}".format(
+        _sanitize_name(name_hint or "rec"),
+        n_ch, int(fs), n_samp, h[:8]
+    )
+    return base
+
+
+def _cache_or_load_binary(recording: si.BaseRecording, cache_dir: Union[str, Path]) -> si.BaseRecording:
+    """
+    Cache a recording once to SpikeInterface 'binary_folder' (fast memmap int16).
+    If cache exists, load it; otherwise create it.
+
+    Compatible with SI 0.9x–0.100+:
+      - tries si.load_extractor on existing folder
+      - falls back to si.save(..., format='binary_folder')
+    """
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # Already cached?
+    meta_jsons = ("recording.json", "spikeinterface.json")
+    if any((cache_dir / m).exists() for m in meta_jsons):
+        try:
+            return si.load_extractor(cache_dir)
+        except Exception:
+            pass  # re-save below if load fails
+
+    # Save once (fast path)
+    rec_cached = si.save(recording, folder=str(cache_dir), format="binary_folder")
+    return rec_cached
 
 def extract_spikes(  # noqa: C901
     sorting_folder, results_folder, min_duration_secs: int = 300
@@ -310,169 +386,77 @@ def _save_continous_metrics(
     recording: si.BaseRecording,
     output_folder: Path,
     channel_inds: np.ndarray,
-    RMS_WIN_LENGTH_SECS=3,
-    WELCH_WIN_LENGTH_SAMPLES=2048,
-    TOTAL_SECS=100,
+    RMS_WIN_LENGTH_SECS: Union[int, float] = 3,
+    WELCH_WIN_LENGTH_SAMPLES: int = 2048,
+    TOTAL_SECS: int = 100,
     is_lfp: bool = False,
-    tag: Union[str, None] = None,
-):
+    tag: Optional[str] = None,
+) -> None:
     """
-    Save continuous metrics (e.g., RMS, Welch power spectrum)
-    for the specified channels of a recording.
+    Save continuous metrics (RMS over time and Welch PSD) for selected channels.
 
-    Parameters
-    ----------
-    recording : si.BaseRecording
-        A `BaseRecording` object containing the raw data
-        from the recording session. This object is
-        expected to have methods to access the data
-        for specific channels (e.g., `get_traces()`).
-
-    output_folder : Path
-        The folder where the calculated metrics will be saved.
-        The metrics will be written to files
-        in this directory, with filenames based on the `tag` (if provided).
-
-    channel_inds : np.ndarray
-        A 1D array of integers specifying the indices
-        of the channels for which the metrics should
-        be computed.
-
-    RMS_WIN_LENGTH_SECS : int or float, optional, default=3
-        The length of the window (in seconds) for
-        computing the RMS (Root Mean Square) metric. This
-        is the sliding window used to calculate the
-        RMS value for the signal on each channel.
-
-    WELCH_WIN_LENGTH_SAMPLES : int, optional, default=2048
-        The length of the window (in samples) used in the
-        Welch method for computing the power spectrum.
-        This determines the resolution of the frequency spectrum.
-
-    TOTAL_SECS : int, optional, default=100
-        The total duration (in seconds) of the data to be processed.
-        Only the first `TOTAL_SECS` of
-        the recording will be analyzed.
-        This can be adjusted if only a portion of
-        the recording is of interest.
-
-    is_lfp : bool, optional, default=False
-        If `True`, the function assumes the recording
-        contains local field potentials (LFP). If `False`,
-        it assumes the recording contains spikes or another type of signal.
-
-    tag : str or None, optional, default=None
-        An optional tag used to distinguish different outputs.
-        If provided, this string will be included
-        in the filenames for the saved metrics.
-
-    Returns
-    -------
-    None
-        This function does not return any value.
-        The metrics are saved to the `output_folder` specified
-        by the user.
+    Performance:
+      - assumes 'recording' is an uncompressed cache (binary_folder)
+      - does unscaled reads (int16) and casts once to float32
     """
+    fs = float(recording.sampling_frequency)
 
-    rms_win_length_samples = 2 ** np.ceil(
-        np.log2(recording.sampling_frequency * RMS_WIN_LENGTH_SECS)
-    )
-    total_samples = int(
-        np.min(
-            [
-                recording.sampling_frequency * TOTAL_SECS,
-                recording.get_num_samples(),
-            ]
-        )
-    )
+    rms_win_length_samples = int(2 ** np.ceil(np.log2(fs * RMS_WIN_LENGTH_SECS)))
+    total_samples = int(min(fs * TOTAL_SECS, recording.get_num_samples()))
 
-    # the window generator will generates window indices
-    wingen = WindowGenerator(
-        ns=total_samples, nswin=rms_win_length_samples, overlap=0
-    )
+    wingen = WindowGenerator(ns=total_samples, nswin=rms_win_length_samples, overlap=0)
 
-    win = {
-        "TRMS": np.zeros((wingen.nwin, recording.get_num_channels())),
-        "nsamples": np.zeros((wingen.nwin,)),
-        "fscale": fscale(
-            WELCH_WIN_LENGTH_SAMPLES,
-            1 / recording.sampling_frequency,
-            one_sided=True,
-        ),
-        "tscale": wingen.tscale(fs=recording.sampling_frequency),
-    }
+    fscale_arr = fscale(WELCH_WIN_LENGTH_SAMPLES, 1.0 / fs, one_sided=True)
+    tscale_arr = wingen.tscale(fs=fs)
+    n_ch = int(recording.get_num_channels())
 
-    win["spectral_density"] = np.zeros(
-        (len(win["fscale"]), recording.get_num_channels())
-    )
+    TRMS = np.zeros((wingen.nwin, n_ch), dtype=np.float32)
+    nsamples = np.zeros((wingen.nwin,), dtype=np.int32)
+    spectral_density = np.zeros((len(fscale_arr), n_ch), dtype=np.float32)
 
-    with tqdm(total=wingen.nwin) as pbar:
-
+    with tqdm(total=wingen.nwin, desc="Continuous metrics") as pbar:
         for first, last in wingen.firstlast:
+            X = recording.get_traces(start_frame=first, end_frame=last, return_scaled=False)  # (samples, ch)
+            D = X.T.astype(np.float32, copy=False)  # (ch, samples)
 
-            D = recording.get_traces(start_frame=first, end_frame=last).T
+            # high-pass <1 Hz removal (uses your helper)
+            D = hp(D, 1.0 / fs, [0, 1])
 
-            # remove low frequency noise below 1 Hz
-            D = hp(D, 1 / recording.sampling_frequency, [0, 1])
             iw = wingen.iw
-            win["TRMS"][iw, :] = rms(D)
-            win["nsamples"][iw] = D.shape[1]
+            TRMS[iw, :] = rms(D)
+            nsamples[iw] = D.shape[1]
 
-            # the last window may be smaller than what is needed for welch
-            if last - first < WELCH_WIN_LENGTH_SAMPLES:
-                continue
+            if (last - first) >= WELCH_WIN_LENGTH_SAMPLES:
+                _, w = signal.welch(
+                    D,
+                    fs=fs,
+                    window="hann",
+                    nperseg=WELCH_WIN_LENGTH_SAMPLES,
+                    detrend="constant",
+                    return_onesided=True,
+                    scaling="density",
+                    axis=-1,
+                )
+                spectral_density += w.T.astype(np.float32, copy=False)
 
-            # compute a smoothed spectrum using welch method
-            _, w = signal.welch(
-                D,
-                fs=recording.sampling_frequency,
-                window="hann",
-                nperseg=WELCH_WIN_LENGTH_SAMPLES,
-                detrend="constant",
-                return_onesided=True,
-                scaling="density",
-                axis=-1,
-            )
-            win["spectral_density"] += w.T
-            # print at least every 20 windows
-            if (iw % min(20, max(int(np.floor(wingen.nwin / 75)), 1))) == 0:
-                pbar.update(iw)
+            pbar.update(1)
 
-    win["TRMS"] = win["TRMS"][:, channel_inds]
-    win["spectral_density"] = win["spectral_density"][:, channel_inds]
+    TRMS = TRMS[:, channel_inds]
+    spectral_density = spectral_density[:, channel_inds]
 
     if is_lfp:
-        if tag is not None:
-            alf_object_time = f"ephysTimeRmsLF{tag}"
-            alf_object_freq = f"ephysSpectralDensityLF{tag}"
-        else:
-            alf_object_time = "ephysTimeRmsLF"
-            alf_object_freq = "ephysSpectralDensityLF"
+        alf_object_time = ("ephysTimeRmsLF" + (tag or "")) if tag else "ephysTimeRmsLF"
+        alf_object_freq = ("ephysSpectralDensityLF" + (tag or "")) if tag else "ephysSpectralDensityLF"
     else:
-        if tag is not None:
-            alf_object_time = f"ephysTimeRmsAP{tag}"
-            alf_object_freq = f"ephysSpectralDensityAP{tag}"
-        else:
-            alf_object_time = "ephysTimeRmsAP"
-            alf_object_freq = "ephysSpectralDensityAP"
+        alf_object_time = ("ephysTimeRmsAP" + (tag or "")) if tag else "ephysTimeRmsAP"
+        alf_object_freq = ("ephysSpectralDensityAP" + (tag or "")) if tag else "ephysSpectralDensityAP"
 
-    tdict = {
-        "rms": win["TRMS"].astype(np.single),
-        "timestamps": win["tscale"].astype(np.single),
-    }
-    alfio.save_object_npy(
-        output_folder, object=alf_object_time, dico=tdict, namespace="iblqc"
-    )
+    tdict = {"rms": TRMS.astype(np.single), "timestamps": tscale_arr.astype(np.single)}
+    alfio.save_object_npy(output_folder, object=alf_object_time, dico=tdict, namespace="iblqc")
 
-    fdict = {
-        "power": win["spectral_density"].astype(np.single),
-        "freqs": win["fscale"].astype(np.single),
-    }
-    alfio.save_object_npy(
-        output_folder, object=alf_object_freq, dico=fdict, namespace="iblqc"
-    )
-
-
+    fdict = {"power": spectral_density.astype(np.single), "freqs": fscale_arr.astype(np.single)}
+    alfio.save_object_npy(output_folder, object=alf_object_freq, dico=fdict, namespace="iblqc")
+    
 def remove_overlapping_channels(recordings) -> list[si.BaseRecording]:
     """
     Remove recordings with overlapping channels
@@ -542,6 +526,77 @@ def remove_overlapping_channels(recordings) -> list[si.BaseRecording]:
 
     return removed_recordings
 
+def _save_channel_metadata(recording: si.BaseRecording, output_folder: Path) -> None:
+    """
+    Save common channel-level metadata expected by IBL/phy-style tools, using
+    what SpikeInterface exposes on the Recording.
+
+    Writes (if available):
+      - channels.localCoordinates : Nx2 or Nx3 float32
+      - channels.localCoordinate  : same as above (alias for legacy consumers)
+      - channels.rawInd           : N int32 (zero-based channel ids)
+      - channels.shankIds         : N int16 (if 'group'/'shank' property exists)
+    """
+    output_folder = Path(output_folder)
+    output_folder.mkdir(parents=True, exist_ok=True)
+
+    # 1) local coordinates
+    locs = None
+    try:
+        locs = recording.get_channel_locations()  # often Nx2 (x,y) or Nx3 (x,y,z)
+    except Exception:
+        pass
+
+    if locs is not None:
+        locs = np.asarray(locs)
+        # canonical IBL name:
+        alfio.save_object_npy(
+            output_folder, object="channels",
+            dico={"localCoordinates": locs.astype(np.float32)},
+            namespace="ibl"
+        )
+        # legacy alias (some code looks for singular):
+        alfio.save_object_npy(
+            output_folder, object="channels",
+            dico={"localCoordinate": locs.astype(np.float32)},
+            namespace="ibl"
+        )
+
+    # 2) raw channel indices
+    try:
+        raw_ind = np.asarray(recording.channel_ids)
+    except Exception:
+        raw_ind = None
+    if raw_ind is not None:
+        # ensure numeric zero-based
+        if raw_ind.dtype.kind not in ("i", "u"):
+            # try to coerce to int
+            raw_ind = np.asarray([int(x) for x in raw_ind], dtype=np.int32)
+        alfio.save_object_npy(
+            output_folder, object="channels",
+            dico={"rawInd": raw_ind.astype(np.int32)},
+            namespace="ibl"
+        )
+
+    # 3) shank / group ids
+    shank = None
+    for key in ("group", "shank", "shank_ids", "shank_id"):
+        try:
+            vals = recording.get_channel_property(key)
+            if vals is not None:
+                shank = np.asarray(vals)
+                break
+        except Exception:
+            continue
+    if shank is not None:
+        # coerce to small int
+        if shank.dtype.kind not in ("i", "u"):
+            shank = np.asarray([int(x) for x in shank], dtype=np.int16)
+        alfio.save_object_npy(
+            output_folder, object="channels",
+            dico={"shankIds": shank.astype(np.int16)},
+            namespace="ibl"
+        )
 
 def get_ecephys_stream_names(base_folder: Path) -> tuple[list[str], Path, int]:
     """
@@ -837,319 +892,66 @@ def get_mappings(  # noqa: C901
     return main_recordings, recording_mappings
 
 
-def extract_continuous(  # noqa: C901
-    sorting_folder: Path,
-    results_folder: Path,
-    min_duration_secs: int = 300,
-    probe_surface_finding: Union[Path, None] = None,
-    use_lfp_cmr: bool = False,
-):
+def extract_continuous(
+    recordings_by_name: Mapping[str, si.BaseRecording],
+    results_folder: Union[str, Path],
+    total_secs: int = 100,
+    rms_win_length_secs: Union[int, float] = 3,
+    welch_win_length_samples: int = 2048,
+    is_lfp_predicate: Optional[callable] = None,
+    channel_selection: Optional[Mapping[str, Sequence[int]]] = None,
+    cache_root: Union[str, Path] = "/scratch",
+    tag_by_name: Optional[Mapping[str, str]] = None,
+    save_channels_metadata: bool = True,
+) -> None:
     """
-    Extract continuous data from sorted recordings
-    and save the results to the specified folder.
+    Compute & save continuous metrics (RMS time series + Welch PSD) for 1+ recordings,
+    with per-recording caching under /scratch by default, and restored channels.* saves.
 
-    This function processes the sorted data in the provided `sorting_folder`
-    and extracts continuous
-    signals, such as local field potentials (LFP) or
-    continuous neural recordings, to be saved in
-    the `results_folder`. The extracted data can be
-    filtered by a minimum duration and may use a
-    probe surface finding file for additional processing.
-
-    Parameters
-    ----------
-    sorting_folder : Path
-        The path to the folder containing the sorted data.
-        This folder is expected to contain
-        spike-sorted recordings, such as `.npy` or `.csv` files,
-        depending on the sorting method used.
-
-    results_folder : Path
-        The path to the folder where the processed continuous
-        data will be saved. The extracted signals
-        will be written to files within this directory,
-        typically in formats suitable for further analysis.
-
-    min_duration_secs : int, optional, default=300
-        The minimum duration (in seconds) of the continuous data
-        that will be included in the extraction.
-        Recordings shorter than this duration will be ignored.
-
-    probe_surface_finding : Path or None, optional, default=None
-        The path to a file that contains information about
-        the probe surface finding, if applicable.
-        This can be used for further processing or
-        filtering of the data based on probe configuration.
-        If not provided, no surface finding data will be used.
-
-    use_lfp_cmr : bool, optional, default=False
-        If `True`, the function will use the local
-        field potential (LFP) continuous metric results
-        (CMR) for additional analysis. If `False`, skips this
-
-    Returns
-    -------
-    None
-        This function does not return any value.
-        The processed continuous data is saved to the
-        `results_folder` specified by the user.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the `sorting_folder` or `results_folder`
-        do not exist or cannot be accessed.
-
-    ValueError
-        If the `min_duration_secs` is negative or
-        invalid, or if there are issues with the
-        probe surface finding file.
-
-    Notes
-    -----
-    - The function assumes that the `sorting_folder`
-      contains valid sorted data.
-    - The extracted continuous data will be saved
-      in a format suitable for further analysis,
-      depending on the type of data processed (e.g., LFP, spike data).
-    - If `probe_surface_finding` is provided, it
-      must be in a compatible format for additional processing.
-    - The `use_lfp_cmr` option should be set to
-      `True` if the analysis involves local field potentials
-      and associated metrics.
+    recordings_by_name : {stream_name -> Recording}
+    results_folder     : outputs under <results_folder>/<stream_name>/
     """
+    results_folder = Path(results_folder)
+    results_folder.mkdir(parents=True, exist_ok=True)
 
-    session_folder = Path(str(sorting_folder).split("_sorted")[0])
+    if is_lfp_predicate is None:
+        def _default_is_lfp(name: str) -> bool:
+            return "lfp" in str(name).lower()
+        is_lfp_predicate = _default_is_lfp
 
-    # At some point the directory structure changed- handle different cases.
-    neuropix_streams, ecephys_compressed_folder, num_blocks = (
-        get_ecephys_stream_names(session_folder)
-    )
-    # recording is a seperate asset,
-    # identified by probe_surface_finding
-    neuropix_streams_surface = []
-    if probe_surface_finding is not None:
-        (
-            neuropix_streams_surface,
-            ecephys_compressed_folder_surface,
-            num_blocks,
-        ) = get_ecephys_stream_names(probe_surface_finding)
+    for stream_name, rec in recordings_by_name.items():
+        # 1) per-recording cache under /scratch/<auto-name>/
+        auto_name = _recording_fingerprint(rec, name_hint=stream_name)
+        cache_dir = Path(cache_root) / auto_name
+        rec_cached = _cache_or_load_binary(rec, cache_dir)
 
-    recording_mappings = {}
-    main_recordings = {}
+        # 2) per-stream output directory
+        out_dir = results_folder / _sanitize_name(stream_name)
+        out_dir.mkdir(parents=True, exist_ok=True)
 
-    main_recordings, recording_mappings = get_mappings(
-        main_recordings,
-        recording_mappings,
-        neuropix_streams,
-        num_blocks,
-        ecephys_compressed_folder,
-        min_duration_secs=min_duration_secs,
-    )
-    if len(neuropix_streams_surface) > 0:
-        main_recordings, recording_mappings = get_mappings(
-            main_recordings,
-            recording_mappings,
-            neuropix_streams_surface,
-            num_blocks,
-            ecephys_compressed_folder_surface,
-            min_duration_secs=min_duration_secs,
-        )
-
-    for stream_name, main_recordings_streams in main_recordings.items():
-        if "LFP" in stream_name:
-            continue
-
-        if stream_name in recording_mappings:
-            min_samples = min(
-                [
-                    recording.get_num_samples()
-                    for recording in recording_mappings[stream_name]
-                ]
-            )
-            recordings_sliced = [
-                recording.frame_slice(start_frame=0, end_frame=min_samples)
-                for recording in recording_mappings[stream_name]
-            ]
-            main_recordings_sliced = [
-                main_recording.frame_slice(
-                    start_frame=0, end_frame=min_samples
-                )
-                for main_recording in main_recordings_streams
-            ]
-
-            total_recordings = main_recordings_sliced + recordings_sliced
-            recordings_removed = remove_overlapping_channels(total_recordings)
-            for recording in recordings_removed:
-                recording.reset_times()
-
-            recording_ap = si.aggregate_channels(
-                recording_list=recordings_removed
-            )
+        # 3) optional channel selection
+        if channel_selection is not None and stream_name in channel_selection:
+            ch_inds = np.asarray(list(channel_selection[stream_name]), dtype=int)
         else:
-            min_samples = min(
-                [
-                    main_recording.get_num_samples()
-                    for main_recording in main_recordings_streams
-                ]
-            )
-            main_recordings_sliced = [
-                main_recording.frame_slice(
-                    start_frame=0, end_frame=min_samples
-                )
-                for main_recording in main_recordings_streams
-            ]
+            ch_inds = np.arange(rec_cached.get_num_channels(), dtype=int)
 
-            recordings_removed = remove_overlapping_channels(
-                main_recordings_sliced
-            )
-            for recording in recordings_removed:
-                recording.reset_times()
+        # 4) optional tag for ALF object names
+        tag = None
+        if tag_by_name is not None and stream_name in tag_by_name:
+            tag = str(tag_by_name[stream_name])
 
-            recording_ap = si.aggregate_channels(
-                recording_list=recordings_removed
-            )
-
-        print(stream_name)
-
-        probe_name = stream_name.split(".")[1].split("_")[0]
-
-        output_folder = Path(results_folder) / probe_name
-
-        if not output_folder.exists():
-            output_folder.mkdir()
-
-        if use_lfp_cmr:
-            recording_highpass = spre.highpass_filter(recording_ap)
-            _, channel_labels = spre.detect_bad_channels(recording_highpass)
-            # TODO: might not work, or adjust threshold,
-            # load preprocessed recording
-            out_channel_mask = channel_labels == "out"
-
-        if stream_name.replace("AP", "LFP") in main_recordings:
-            stream_name = stream_name.replace("AP", "LFP")
-            if stream_name in recording_mappings:
-                min_samples = min(
-                    [
-                        recording.get_num_samples()
-                        for recording in recording_mappings[stream_name]
-                    ]
-                )
-                recordings_sliced = [
-                    recording.frame_slice(start_frame=0, end_frame=min_samples)
-                    for recording in recording_mappings[stream_name]
-                ]
-                main_recordings_lfp = [
-                    main_recording.frame_slice(
-                        start_frame=0, end_frame=min_samples
-                    )
-                    for main_recording in main_recordings[stream_name]
-                ]
-                total_recordings = main_recordings_lfp + recordings_sliced
-
-                recordings_removed = remove_overlapping_channels(
-                    total_recordings
-                )
-                for recording in recordings_removed:
-                    recording.reset_times()
-
-                recording_lfp = si.aggregate_channels(
-                    recording_list=recordings_removed
-                )
-            else:
-                min_samples = min(
-                    [
-                        recording.get_num_samples()
-                        for recording in main_recordings[stream_name]
-                    ]
-                )
-                main_recordings_lfp = [
-                    main_recording.frame_slice(
-                        start_frame=0, end_frame=min_samples
-                    )
-                    for main_recording in main_recordings[stream_name]
-                ]
-
-                recordings_removed = remove_overlapping_channels(
-                    main_recordings_lfp
-                )
-                for recording in recordings_removed:
-                    recording.reset_times()
-
-                recording_lfp = si.aggregate_channels(
-                    recording_list=recordings_removed
-                )
-
-            if use_lfp_cmr:
-                out_channel_ids = recording_lfp.channel_ids[out_channel_mask]
-                if len(out_channel_ids) > 0:
-                    recording_lfp = spre.common_reference(
-                        recording_lfp,
-                        reference="global",
-                        ref_channel_ids=out_channel_ids.tolist(),
-                    )
-
-        max_samples_lfp = max(
-            [
-                recording.get_num_samples()
-                for recording in main_recordings[stream_name]
-            ]
-        )
-        main_recording_lfp = spre.highpass_filter(
-            [
-                recording
-                for recording in main_recordings[stream_name]
-                if recording.get_num_samples() == max_samples_lfp
-            ][0]
-        )
-
-        max_samples_ap = max(
-            [
-                recording.get_num_samples()
-                for recording in main_recordings[
-                    stream_name.replace("LFP", "AP")
-                ]
-            ]
-        )
-        main_recording_ap = spre.highpass_filter(
-            [
-                recording
-                for recording in main_recordings[
-                    stream_name.replace("LFP", "AP")
-                ]
-                if recording.get_num_samples() == max_samples_ap
-            ][0]
-        )
-        channel_inds = np.arange(recording_ap.get_num_channels())
-
-        print(f"Stream sample rate: {recording_ap.sampling_frequency}")
-
-        _save_continous_metrics(recording_ap, output_folder, channel_inds)
+        # 5) metrics
         _save_continous_metrics(
-            recording_lfp, output_folder, channel_inds, is_lfp=True
+            recording=rec_cached,
+            output_folder=out_dir,
+            channel_inds=ch_inds,
+            RMS_WIN_LENGTH_SECS=rms_win_length_secs,
+            WELCH_WIN_LENGTH_SAMPLES=welch_win_length_samples,
+            TOTAL_SECS=total_secs,
+            is_lfp=bool(is_lfp_predicate(stream_name)),
+            tag=tag,
         )
 
-        # save for longer main recording
-        _save_continous_metrics(
-            main_recording_lfp,
-            output_folder,
-            channel_inds=np.arange(main_recording_lfp.get_num_channels()),
-            TOTAL_SECS=600,
-            is_lfp=True,
-            tag="Main",
-        )
-        _save_continous_metrics(
-            main_recording_ap,
-            output_folder,
-            channel_inds=np.arange(main_recording_ap.get_num_channels()),
-            TOTAL_SECS=600,
-            tag="Main",
-        )
-
-        # need appended channel locations
-        # so app can show surface recording locations also
-        np.save(
-            output_folder / "channels.localCoordinates.npy",
-            recording_ap.get_channel_locations(),
-        )
-        np.save(output_folder / "channels.rawInd.npy", channel_inds)
+        # 6) channel metadata (restored)
+        if save_channels_metadata:
+            _save_channel_metadata(rec_cached, out_dir)
