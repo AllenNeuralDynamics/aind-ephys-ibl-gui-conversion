@@ -1012,7 +1012,7 @@ def extract_continuous(  # noqa: C901
 
         print(stream_name)
 
-        probe_name = stream_name.split(".")[1].split("-")[0]
+        probe_name = stream_name.split(".")[1].split("_")[0]
 
         output_folder = Path(results_folder) / probe_name
 
