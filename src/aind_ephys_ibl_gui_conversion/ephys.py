@@ -4,7 +4,7 @@ Functions to process ephys data
 
 import logging
 from pathlib import Path
-from typing import Union
+from typing import List, Union
 
 import numpy as np
 import one.alf.io as alfio
@@ -92,7 +92,7 @@ def extract_spikes(  # noqa: C901
     )
 
     neuropix_streams = [s for s in stream_names if "Neuropix" in s]
-    probe_names = [s.split(".")[1].split("_")[0] for s in neuropix_streams]
+    probe_names = [s.split(".")[1].split("-")[0] for s in neuropix_streams]
 
     for idx, stream_name in enumerate(neuropix_streams):
         analyzer_mappings = []
@@ -836,6 +836,32 @@ def get_mappings(  # noqa: C901
 
     return main_recordings, recording_mappings
 
+def get_largest_segment_recordings(recordings: List):
+    """
+    Return recordings containing only the segment with the largest number of samples.
+
+    Parameters
+    ----------
+    recordings : List
+        List of recording objects, each with multiple segments.
+
+    Returns
+    -------
+    recordings_largest_segment : List
+        Each recording reduced to its largest segment only.
+    """
+    recordings_largest_segment = []
+
+    for rec in recordings:
+        # Find the segment with the maximum number of samples
+        segment_lengths = [rec.get_num_samples(seg) for seg in range(rec.get_num_segments())]
+        max_index = segment_lengths.index(max(segment_lengths))
+
+        # Select that segment
+        largest_seg_rec = rec.select_segments(max_index)
+        recordings_largest_segment.append(largest_seg_rec)
+
+    return recordings_largest_segment
 
 def extract_continuous(  # noqa: C901
     sorting_folder: Path,
@@ -960,23 +986,26 @@ def extract_continuous(  # noqa: C901
         if "LFP" in stream_name:
             continue
 
+        main_recording_segments = get_largest_segment_recordings(main_recordings_streams)
         if stream_name in recording_mappings:
+            recordings_segment = get_largest_segment_recordings(recording_mappings[stream_name])
+
             min_samples = min(
-                [
-                    recording.get_num_samples()
-                    for recording in recording_mappings[stream_name]
-                ]
+                recording.get_num_samples()
+                for recording in recordings_segment
+                
             )
             recordings_sliced = [
                 recording.frame_slice(start_frame=0, end_frame=min_samples)
-                for recording in recording_mappings[stream_name]
+                for recording in recordings_segment
             ]
             main_recordings_sliced = [
                 main_recording.frame_slice(
                     start_frame=0, end_frame=min_samples
                 )
-                for main_recording in main_recordings_streams
+                for main_recording in main_recording_segments
             ]
+
 
             total_recordings = main_recordings_sliced + recordings_sliced
             recordings_removed = remove_overlapping_channels(total_recordings)
@@ -990,14 +1019,14 @@ def extract_continuous(  # noqa: C901
             min_samples = min(
                 [
                     main_recording.get_num_samples()
-                    for main_recording in main_recordings_streams
+                    for main_recording in main_recording_segments
                 ]
             )
             main_recordings_sliced = [
                 main_recording.frame_slice(
                     start_frame=0, end_frame=min_samples
                 )
-                for main_recording in main_recordings_streams
+                for main_recording in main_recording_segments
             ]
 
             recordings_removed = remove_overlapping_channels(
@@ -1012,7 +1041,7 @@ def extract_continuous(  # noqa: C901
 
         print(stream_name)
 
-        probe_name = stream_name.split(".")[1].split("_")[0]
+        probe_name = stream_name.split(".")[1].split("-")[0]
 
         output_folder = Path(results_folder) / probe_name
 
@@ -1026,24 +1055,28 @@ def extract_continuous(  # noqa: C901
             # load preprocessed recording
             out_channel_mask = channel_labels == "out"
 
+
         if stream_name.replace("AP", "LFP") in main_recordings:
             stream_name = stream_name.replace("AP", "LFP")
+            main_recording_segments = get_largest_segment_recordings(main_recordings[stream_name])
+
             if stream_name in recording_mappings:
+                recordings_segment = get_largest_segment_recordings(recording_mappings[stream_name])
                 min_samples = min(
                     [
                         recording.get_num_samples()
-                        for recording in recording_mappings[stream_name]
+                        for recording in recordings_segment
                     ]
                 )
                 recordings_sliced = [
                     recording.frame_slice(start_frame=0, end_frame=min_samples)
-                    for recording in recording_mappings[stream_name]
+                    for recording in recordings_segment
                 ]
                 main_recordings_lfp = [
                     main_recording.frame_slice(
                         start_frame=0, end_frame=min_samples
                     )
-                    for main_recording in main_recordings[stream_name]
+                    for main_recording in main_recording_segments
                 ]
                 total_recordings = main_recordings_lfp + recordings_sliced
 
@@ -1060,14 +1093,14 @@ def extract_continuous(  # noqa: C901
                 min_samples = min(
                     [
                         recording.get_num_samples()
-                        for recording in main_recordings[stream_name]
+                        for recording in main_recording_segments
                     ]
                 )
                 main_recordings_lfp = [
                     main_recording.frame_slice(
                         start_frame=0, end_frame=min_samples
                     )
-                    for main_recording in main_recordings[stream_name]
+                    for main_recording in main_recording_segments
                 ]
 
                 recordings_removed = remove_overlapping_channels(
@@ -1092,31 +1125,28 @@ def extract_continuous(  # noqa: C901
         max_samples_lfp = max(
             [
                 recording.get_num_samples()
-                for recording in main_recordings[stream_name]
+                for recording in main_recording_segments
             ]
         )
         main_recording_lfp = spre.highpass_filter(
             [
                 recording
-                for recording in main_recordings[stream_name]
+                for recording in main_recording_segments
                 if recording.get_num_samples() == max_samples_lfp
             ][0]
         )
 
+        main_recording_segments = get_largest_segment_recordings(main_recordings[stream_name.replace("LFP", "AP")])
         max_samples_ap = max(
             [
                 recording.get_num_samples()
-                for recording in main_recordings[
-                    stream_name.replace("LFP", "AP")
-                ]
+                for recording in main_recording_segments
             ]
         )
         main_recording_ap = spre.highpass_filter(
             [
                 recording
-                for recording in main_recordings[
-                    stream_name.replace("LFP", "AP")
-                ]
+                for recording in main_recording_segments
                 if recording.get_num_samples() == max_samples_ap
             ][0]
         )
