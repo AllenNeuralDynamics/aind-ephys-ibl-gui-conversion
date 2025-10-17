@@ -3,20 +3,21 @@ Functions to process ephys data
 """
 
 import logging
+import multiprocessing
 from pathlib import Path
 from typing import Union
 
 import numpy as np
-import one.alf.io as alfio
 import pandas as pd
 import spikeinterface as si
 import spikeinterface.extractors as se
 import spikeinterface.preprocessing as spre
 from scipy import signal
+from scipy.signal import welch
+from spikeinterface.core import get_random_data_chunks
 from spikeinterface.exporters import export_to_phy
-from tqdm import tqdm
+from spikeinterface.exporters.to_ibl import compute_rms
 
-from .utils import WindowGenerator, fscale, hp, rms
 
 # here we define some constants used for defining if timestamps are ok
 # or should be skipped
@@ -304,173 +305,6 @@ def extract_spikes(  # noqa: C901
         ]
         np.save(output_folder / "clusters.waveforms.npy", np.array(waveforms))
         quality_metrics_df.to_csv(output_folder / "clusters.metrics.csv")
-
-
-def _save_continous_metrics(
-    recording: si.BaseRecording,
-    output_folder: Path,
-    channel_inds: np.ndarray,
-    RMS_WIN_LENGTH_SECS=3,
-    WELCH_WIN_LENGTH_SAMPLES=2048,
-    TOTAL_SECS=100,
-    is_lfp: bool = False,
-    tag: Union[str, None] = None,
-):
-    """
-    Save continuous metrics (e.g., RMS, Welch power spectrum)
-    for the specified channels of a recording.
-
-    Parameters
-    ----------
-    recording : si.BaseRecording
-        A `BaseRecording` object containing the raw data
-        from the recording session. This object is
-        expected to have methods to access the data
-        for specific channels (e.g., `get_traces()`).
-
-    output_folder : Path
-        The folder where the calculated metrics will be saved.
-        The metrics will be written to files
-        in this directory, with filenames based on the `tag` (if provided).
-
-    channel_inds : np.ndarray
-        A 1D array of integers specifying the indices
-        of the channels for which the metrics should
-        be computed.
-
-    RMS_WIN_LENGTH_SECS : int or float, optional, default=3
-        The length of the window (in seconds) for
-        computing the RMS (Root Mean Square) metric. This
-        is the sliding window used to calculate the
-        RMS value for the signal on each channel.
-
-    WELCH_WIN_LENGTH_SAMPLES : int, optional, default=2048
-        The length of the window (in samples) used in the
-        Welch method for computing the power spectrum.
-        This determines the resolution of the frequency spectrum.
-
-    TOTAL_SECS : int, optional, default=100
-        The total duration (in seconds) of the data to be processed.
-        Only the first `TOTAL_SECS` of
-        the recording will be analyzed.
-        This can be adjusted if only a portion of
-        the recording is of interest.
-
-    is_lfp : bool, optional, default=False
-        If `True`, the function assumes the recording
-        contains local field potentials (LFP). If `False`,
-        it assumes the recording contains spikes or another type of signal.
-
-    tag : str or None, optional, default=None
-        An optional tag used to distinguish different outputs.
-        If provided, this string will be included
-        in the filenames for the saved metrics.
-
-    Returns
-    -------
-    None
-        This function does not return any value.
-        The metrics are saved to the `output_folder` specified
-        by the user.
-    """
-
-    rms_win_length_samples = 2 ** np.ceil(
-        np.log2(recording.sampling_frequency * RMS_WIN_LENGTH_SECS)
-    )
-    total_samples = int(
-        np.min(
-            [
-                recording.sampling_frequency * TOTAL_SECS,
-                recording.get_num_samples(),
-            ]
-        )
-    )
-
-    # the window generator will generates window indices
-    wingen = WindowGenerator(
-        ns=total_samples, nswin=rms_win_length_samples, overlap=0
-    )
-
-    win = {
-        "TRMS": np.zeros((wingen.nwin, recording.get_num_channels())),
-        "nsamples": np.zeros((wingen.nwin,)),
-        "fscale": fscale(
-            WELCH_WIN_LENGTH_SAMPLES,
-            1 / recording.sampling_frequency,
-            one_sided=True,
-        ),
-        "tscale": wingen.tscale(fs=recording.sampling_frequency),
-    }
-
-    win["spectral_density"] = np.zeros(
-        (len(win["fscale"]), recording.get_num_channels())
-    )
-
-    with tqdm(total=wingen.nwin) as pbar:
-
-        for first, last in wingen.firstlast:
-
-            D = recording.get_traces(start_frame=first, end_frame=last).T
-
-            # remove low frequency noise below 1 Hz
-            D = hp(D, 1 / recording.sampling_frequency, [0, 1])
-            iw = wingen.iw
-            win["TRMS"][iw, :] = rms(D)
-            win["nsamples"][iw] = D.shape[1]
-
-            # the last window may be smaller than what is needed for welch
-            if last - first < WELCH_WIN_LENGTH_SAMPLES:
-                continue
-
-            # compute a smoothed spectrum using welch method
-            _, w = signal.welch(
-                D,
-                fs=recording.sampling_frequency,
-                window="hann",
-                nperseg=WELCH_WIN_LENGTH_SAMPLES,
-                detrend="constant",
-                return_onesided=True,
-                scaling="density",
-                axis=-1,
-            )
-            win["spectral_density"] += w.T
-            # print at least every 20 windows
-            if (iw % min(20, max(int(np.floor(wingen.nwin / 75)), 1))) == 0:
-                pbar.update(iw)
-
-    win["TRMS"] = win["TRMS"][:, channel_inds]
-    win["spectral_density"] = win["spectral_density"][:, channel_inds]
-
-    if is_lfp:
-        if tag is not None:
-            alf_object_time = f"ephysTimeRmsLF{tag}"
-            alf_object_freq = f"ephysSpectralDensityLF{tag}"
-        else:
-            alf_object_time = "ephysTimeRmsLF"
-            alf_object_freq = "ephysSpectralDensityLF"
-    else:
-        if tag is not None:
-            alf_object_time = f"ephysTimeRmsAP{tag}"
-            alf_object_freq = f"ephysSpectralDensityAP{tag}"
-        else:
-            alf_object_time = "ephysTimeRmsAP"
-            alf_object_freq = "ephysSpectralDensityAP"
-
-    tdict = {
-        "rms": win["TRMS"].astype(np.single),
-        "timestamps": win["tscale"].astype(np.single),
-    }
-    alfio.save_object_npy(
-        output_folder, object=alf_object_time, dico=tdict, namespace="iblqc"
-    )
-
-    fdict = {
-        "power": win["spectral_density"].astype(np.single),
-        "freqs": win["fscale"].astype(np.single),
-    }
-    alfio.save_object_npy(
-        output_folder, object=alf_object_freq, dico=fdict, namespace="iblqc"
-    )
 
 
 def remove_overlapping_channels(recordings) -> list[si.BaseRecording]:
@@ -1124,27 +958,62 @@ def extract_continuous(  # noqa: C901
 
         print(f"Stream sample rate: {recording_ap.sampling_frequency}")
 
-        _save_continous_metrics(recording_ap, output_folder, channel_inds)
-        _save_continous_metrics(
-            recording_lfp, output_folder, channel_inds, is_lfp=True
-        )
+        n_jobs = multiprocessing.cpu_count() - 1
+        rms_ap, rms_times_ap = compute_rms(recording_ap, n_jobs=n_jobs)
+        rms_main_ap, rms_times_main_ap = compute_rms(main_recording_ap, n_jobs=n_jobs)
 
-        # save for longer main recording
-        _save_continous_metrics(
+        rms_main_lfp, rms_times_main_lfp = compute_rms(main_recording_lfp, n_jobs=n_jobs)
+        rms_lfp, rms_times_lfp = compute_rms(recording_lfp, n_jobs=n_jobs)
+
+        np.save(output_folder / "_iblqc_ephysTimeRmsAP.rms.npy", rms_ap)
+        np.save(output_folder / "_iblqc_ephysTimeRmsAP.timestamps.npy", rms_times_ap)
+
+        np.save(output_folder / "_iblqc_ephysTimeRmsAPMain.rms.npy", rms_main_ap)
+        np.save(output_folder / "_iblqc_ephysTimeRmsAPMain.timestamps.npy", rms_times_main_ap)
+
+        np.save(output_folder / "_iblqc_ephysTimeRmsLF.rms.npy", rms_lfp)
+        np.save(output_folder / "_iblqc_ephysTimeRmsLF.timestamps.npy", rms_times_lfp)
+
+        np.save(output_folder / "_iblqc_ephysTimeRmsLFMain.rms.npy", rms_main_lfp)
+        np.save(output_folder / "_iblqc_ephysTimeRmsLFMain.timestamps.npy", rms_times_main_lfp)
+
+        lfp_sample_data_main = get_random_data_chunks(
             main_recording_lfp,
-            output_folder,
-            channel_inds=np.arange(main_recording_lfp.get_num_channels()),
-            TOTAL_SECS=600,
-            is_lfp=True,
-            tag="Main",
+            num_chunks_per_segment=100,
+            chunk_duration=f"1s",
+            concatenated=True,
         )
-        _save_continous_metrics(
-            main_recording_ap,
-            output_folder,
-            channel_inds=np.arange(main_recording_ap.get_num_channels()),
-            TOTAL_SECS=600,
-            tag="Main",
+        psd = np.zeros((2**14 // 2 + 1, lfp_sample_data_main.shape[1]), dtype=np.float32)
+        for i_channel in range(lfp_sample_data_main.shape[1]):
+            freqs, Pxx = welch(
+                lfp_sample_data_main[:, i_channel],
+                fs=main_recording_lfp.sampling_frequency,
+                nperseg=2**14,
+            )
+            psd[:, i_channel] = Pxx
+
+        freqs = freqs.astype(np.float32)
+        np.save(output_folder / "_iblqc_ephysSpectralDensityLFMain.power.npy", psd)
+        np.save(output_folder / "_iblqc_ephysSpectralDensityLFMain.freqs.npy", freqs)
+
+        lfp_sample_data = get_random_data_chunks(
+            recording_lfp,
+            num_chunks_per_segment=100,
+            chunk_duration=f"1s",
+            concatenated=True,
         )
+        psd = np.zeros((2**14 // 2 + 1, lfp_sample_data.shape[1]), dtype=np.float32)
+        for i_channel in range(lfp_sample_data.shape[1]):
+            freqs, Pxx = welch(
+                lfp_sample_data[:, i_channel],
+                fs=recording_lfp.sampling_frequency,
+                nperseg=2**14,
+            )
+            psd[:, i_channel] = Pxx
+
+        freqs = freqs.astype(np.float32)
+        np.save(output_folder / "_iblqc_ephysSpectralDensityLF.power.npy", psd)
+        np.save(output_folder / "_iblqc_ephysSpectralDensityLF.freqs.npy", freqs)
 
         # need appended channel locations
         # so app can show surface recording locations also
