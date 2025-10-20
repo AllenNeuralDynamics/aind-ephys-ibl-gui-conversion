@@ -958,6 +958,11 @@ def extract_continuous(  # noqa: C901
 
         print(f"Stream sample rate: {recording_ap.sampling_frequency}")
 
+        recording_ap = spre.decimate(recording_ap, decimation_factor=30)
+        recording_lfp = spre.decimate(recording_lfp, decimation_factor=30)
+        main_recording_ap = spre.decimate(main_recording_ap, decimation_factor=30)
+        main_recording_lfp = spre.decimate(main_recording_lfp, decimation_factor=30)
+
         n_jobs = multiprocessing.cpu_count() - 1
         rms_ap, rms_times_ap = compute_rms(recording_ap, n_jobs=n_jobs)
         rms_main_ap, rms_times_main_ap = compute_rms(main_recording_ap, n_jobs=n_jobs)
