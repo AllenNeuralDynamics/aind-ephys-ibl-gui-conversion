@@ -64,7 +64,6 @@ def extract_spikes(  # noqa: C901
         Which recording to use for analysis.
         This will almost always be equal to 1,
         except in rare cases.
-        
     Returns
     -------
     None
