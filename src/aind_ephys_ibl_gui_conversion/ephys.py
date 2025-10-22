@@ -960,7 +960,12 @@ def extract_continuous(  # noqa: C901
             ecephys_compressed_folder_surface,
             min_duration_secs=min_duration_secs,
         )
-
+        
+    last_slice = {}
+    for ii,key in enumerate(main_recordings.keys()):
+        last_slice[key] = [x.select_segments(x.get_num_segments()-1) for x in main_recordings[key]]
+    main_recordings = last_slice
+    
     for stream_name, main_recordings_streams in main_recordings.items():
         if "LFP" in stream_name:
             continue
