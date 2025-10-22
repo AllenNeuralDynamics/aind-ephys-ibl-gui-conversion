@@ -34,7 +34,7 @@ MAX_TIMESTAMPS_DEVIATION_MS = 1
 
 
 def extract_spikes(  # noqa: C901
-    sorting_folder, results_folder, min_duration_secs: int = 300
+    sorting_folder, results_folder, min_duration_secs: int = 300,recording_number = 1,
 ):
     """
     Extract spike data from a sorting folder and
@@ -60,6 +60,11 @@ def extract_spikes(  # noqa: C901
         long will be processed. The default value is
         300 seconds (5 minutes).
 
+    recording_number: int,optional, default = 1
+        Which recording to use for analysis. 
+        This will almost always be equal to 1,
+        except in rare cases.
+        
     Returns
     -------
     None
