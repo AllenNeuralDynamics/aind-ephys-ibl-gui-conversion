@@ -125,7 +125,7 @@ def extract_spikes(  # noqa: C901
             for shank_index in range(num_shanks):
                 analyzer_folder = (
                     postprocessed_folder / f"experiment1_{stream_name}_"
-                    f"recording1_group{shank_index}.zarr"
+                    f"recording{recording_number}_group{shank_index}.zarr"
                 )
 
                 if analyzer_folder.is_dir():
@@ -133,7 +133,7 @@ def extract_spikes(  # noqa: C901
                 else:
                     analyzer_folder = (
                         postprocessed_folder / f"experiment1_{stream_name}_"
-                        f"recording1_group{shank_index}"
+                        f"recording{recording_number}_group{shank_index}"
                     )
                     if not analyzer_folder.exists():
                         with open(
@@ -156,14 +156,14 @@ def extract_spikes(  # noqa: C901
         else:
             analyzer_folder = (
                 postprocessed_folder
-                / f"experiment1_{stream_name}_recording1.zarr"
+                / f"experiment1_{stream_name}_recording{recording_number}.zarr"
             )
             if analyzer_folder.is_dir():
                 analyzer = si.load_sorting_analyzer(analyzer_folder)
             else:
                 analyzer_folder = (
                     postprocessed_folder
-                    / f"experiment1_{stream_name}_recording1"
+                    / f"experiment1_{stream_name}_recording{recording_number}"
                 )
                 if not analyzer_folder.exists():
                     with open(output_folder / "sorting_error.txt", "w") as f:
