@@ -61,7 +61,7 @@ def extract_spikes(  # noqa: C901
         300 seconds (5 minutes).
 
     recording_number: int, optional, default = 1
-        Which recording to use for analysis. 
+        Which recording to use for analysis.
         This will almost always be equal to 1,
         except in rare cases.
         
