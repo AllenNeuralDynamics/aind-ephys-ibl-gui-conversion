@@ -3,7 +3,6 @@ Functions to process ephys data
 """
 
 import logging
-import multiprocessing
 from pathlib import Path
 from typing import Union
 
@@ -12,12 +11,10 @@ import pandas as pd
 import spikeinterface as si
 import spikeinterface.extractors as se
 import spikeinterface.preprocessing as spre
-from scipy import signal
 from scipy.signal import welch
 from spikeinterface.core import get_random_data_chunks
 from spikeinterface.exporters import export_to_phy
 from spikeinterface.exporters.to_ibl import compute_rms
-
 
 # here we define some constants used for defining if timestamps are ok
 # or should be skipped
@@ -960,30 +957,53 @@ def extract_continuous(  # noqa: C901
 
         n_jobs = 10
         rms_ap, rms_times_ap = compute_rms(recording_ap, n_jobs=n_jobs)
-        rms_main_ap, rms_times_main_ap = compute_rms(main_recording_ap, n_jobs=n_jobs)
+        rms_main_ap, rms_times_main_ap = compute_rms(
+            main_recording_ap, n_jobs=n_jobs
+        )
 
-        rms_main_lfp, rms_times_main_lfp = compute_rms(main_recording_lfp, n_jobs=n_jobs)
+        rms_main_lfp, rms_times_main_lfp = compute_rms(
+            main_recording_lfp, n_jobs=n_jobs
+        )
         rms_lfp, rms_times_lfp = compute_rms(recording_lfp, n_jobs=n_jobs)
 
         np.save(output_folder / "_iblqc_ephysTimeRmsAP.rms.npy", rms_ap)
-        np.save(output_folder / "_iblqc_ephysTimeRmsAP.timestamps.npy", rms_times_ap)
+        np.save(
+            output_folder / "_iblqc_ephysTimeRmsAP.timestamps.npy",
+            rms_times_ap,
+        )
 
-        np.save(output_folder / "_iblqc_ephysTimeRmsAPMain.rms.npy", rms_main_ap)
-        np.save(output_folder / "_iblqc_ephysTimeRmsAPMain.timestamps.npy", rms_times_main_ap)
+        np.save(
+            output_folder / "_iblqc_ephysTimeRmsAPMain.rms.npy", rms_main_ap
+        )
+        np.save(
+            output_folder / "_iblqc_ephysTimeRmsAPMain.timestamps.npy",
+            rms_times_main_ap,
+        )
 
         np.save(output_folder / "_iblqc_ephysTimeRmsLF.rms.npy", rms_lfp)
-        np.save(output_folder / "_iblqc_ephysTimeRmsLF.timestamps.npy", rms_times_lfp)
+        np.save(
+            output_folder / "_iblqc_ephysTimeRmsLF.timestamps.npy",
+            rms_times_lfp,
+        )
 
-        np.save(output_folder / "_iblqc_ephysTimeRmsLFMain.rms.npy", rms_main_lfp)
-        np.save(output_folder / "_iblqc_ephysTimeRmsLFMain.timestamps.npy", rms_times_main_lfp)
+        np.save(
+            output_folder / "_iblqc_ephysTimeRmsLFMain.rms.npy", rms_main_lfp
+        )
+        np.save(
+            output_folder / "_iblqc_ephysTimeRmsLFMain.timestamps.npy",
+            rms_times_main_lfp,
+        )
 
+        # main recording
         lfp_sample_data_main = get_random_data_chunks(
             main_recording_lfp,
             num_chunks_per_segment=100,
-            chunk_duration=f"1s",
+            chunk_duration="1s",
             concatenated=True,
         )
-        psd = np.zeros((2**14 // 2 + 1, lfp_sample_data_main.shape[1]), dtype=np.float32)
+        psd = np.zeros(
+            (2**14 // 2 + 1, lfp_sample_data_main.shape[1]), dtype=np.float32
+        )
         for i_channel in range(lfp_sample_data_main.shape[1]):
             freqs, Pxx = welch(
                 lfp_sample_data_main[:, i_channel],
@@ -993,16 +1013,24 @@ def extract_continuous(  # noqa: C901
             psd[:, i_channel] = Pxx
 
         freqs = freqs.astype(np.float32)
-        np.save(output_folder / "_iblqc_ephysSpectralDensityLFMain.power.npy", psd)
-        np.save(output_folder / "_iblqc_ephysSpectralDensityLFMain.freqs.npy", freqs)
+        np.save(
+            output_folder / "_iblqc_ephysSpectralDensityLFMain.power.npy", psd
+        )
+        np.save(
+            output_folder / "_iblqc_ephysSpectralDensityLFMain.freqs.npy",
+            freqs,
+        )
 
+        # concatenated recording
         lfp_sample_data = get_random_data_chunks(
             recording_lfp,
             num_chunks_per_segment=100,
-            chunk_duration=f"1s",
+            chunk_duration="1s",
             concatenated=True,
         )
-        psd = np.zeros((2**14 // 2 + 1, lfp_sample_data.shape[1]), dtype=np.float32)
+        psd = np.zeros(
+            (2**14 // 2 + 1, lfp_sample_data.shape[1]), dtype=np.float32
+        )
         for i_channel in range(lfp_sample_data.shape[1]):
             freqs, Pxx = welch(
                 lfp_sample_data[:, i_channel],
@@ -1013,7 +1041,9 @@ def extract_continuous(  # noqa: C901
 
         freqs = freqs.astype(np.float32)
         np.save(output_folder / "_iblqc_ephysSpectralDensityLF.power.npy", psd)
-        np.save(output_folder / "_iblqc_ephysSpectralDensityLF.freqs.npy", freqs)
+        np.save(
+            output_folder / "_iblqc_ephysSpectralDensityLF.freqs.npy", freqs
+        )
 
         # need appended channel locations
         # so app can show surface recording locations also
