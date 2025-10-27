@@ -958,17 +958,7 @@ def extract_continuous(  # noqa: C901
 
         print(f"Stream sample rate: {recording_ap.sampling_frequency}")
 
-        # subsample every 4th channel and decimate to 1khz
-        recording_ap = spre.decimate(recording_ap, decimation_factor=30)
-        recording_ap = recording_ap.select_channels(recording_ap.channel_ids[::4])
-        recording_lfp = spre.decimate(recording_lfp, decimation_factor=30)
-        recording_lfp = recording_lfp.select_channels(recording_lfp.channel_ids[::4])
-        main_recording_ap = spre.decimate(main_recording_ap, decimation_factor=30)
-        main_recording_ap = main_recording_ap.select_channels(main_recording_ap.channel_ids[::4])
-        main_recording_lfp = spre.decimate(main_recording_lfp, decimation_factor=30)
-        main_recording_lfp = main_recording_lfp.select_channels(main_recording_lfp.channel_ids[::4])
-
-        n_jobs = multiprocessing.cpu_count() - 1
+        n_jobs = 10
         rms_ap, rms_times_ap = compute_rms(recording_ap, n_jobs=n_jobs)
         rms_main_ap, rms_times_main_ap = compute_rms(main_recording_ap, n_jobs=n_jobs)
 
