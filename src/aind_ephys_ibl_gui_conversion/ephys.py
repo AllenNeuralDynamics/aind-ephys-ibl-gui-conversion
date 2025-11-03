@@ -311,6 +311,7 @@ def _save_lfp_correlation(
     output_folder: Path,
     time_to_use_secs: int = 600,
     num_bins: int = 5,
+    decimation_factor: int = 30,
     tag: Union[str, None] = None,
 ):
     """
@@ -337,13 +338,26 @@ def _save_lfp_correlation(
     num_bins: int, default = 5
         The number of bins to use
 
+    decimation_factor: int, default = 30
+        The value to decimate the recording by
+
     tag : str or None, optional, default=None
         An optional tag used to distinguish different outputs.
         If provided, this string will be included
         in the filenames for the saved metrics.
     """
-    recording = spre.decimate(recording, decimation_factor=30)
+    logging.info(
+        f"Applying decimation with factor {decimation_factor}"
+    )
+    recording = spre.decimate(recording, decimation_factor=decimation_factor)
+    logging.info(
+        "Applying bandpass filter with freq min 1 "
+        "and freq max 300"
+    )
     recording = spre.bandpass_filter(recording, freq_min=1, freq_max=300)
+    logging.info(
+        "Applying common median referencing"
+    )
     recording = spre.common_reference(
         recording, reference="global", operator="median"
     )
@@ -362,7 +376,7 @@ def _save_lfp_correlation(
             spre.bandpass_filter(recording, freq_min=low_f, freq_max=high_f)
         )
 
-    max_time_window = np.min(time_to_use_secs, recording.get_duration())
+    max_time_window = min(time_to_use_secs, recording.get_duration())
     time_frames = np.linspace(0, max_time_window, num_bins + 1)
     time_frames_rec = (
         time_frames * recording.get_sampling_frequency()
