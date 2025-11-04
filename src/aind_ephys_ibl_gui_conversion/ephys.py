@@ -668,6 +668,104 @@ def get_mappings(  # noqa: C901
     return main_recordings, recording_mappings
 
 
+def _save_rms_and_lfp_spectrum(
+    recording: si.BaseRecording,
+    output_folder: Path,
+    n_jobs: int = 10,
+    is_lfp: bool = False,
+    tag: Union[str, None] = None,
+):
+    """
+    Saves rms and lfp spectrum for the given recording
+
+    Parameters
+    ----------
+    recording: si.BaseRecording
+        The recording to run correlation on
+
+    output_folder: Path
+        The output folder to save outputs to
+
+    n_jobs: int, default = 10
+        The number of jobs to parallelize rms
+
+    is_lfp: bool, default = False
+        If recording is LFP stream
+
+    tag : str or None, optional, default=None
+        An optional tag used to distinguish different outputs.
+        If provided, this string will be included
+        in the filenames for the saved metrics.
+    """
+    rms, rms_times = compute_rms(recording, n_jobs=n_jobs)
+
+    if not is_lfp:
+        if tag is None:
+            np.save(output_folder / "_iblqc_ephysTimeRmsAP.rms.npy", rms)
+            np.save(
+                output_folder / "_iblqc_ephysTimeRmsAP.timestamps.npy",
+                rms_times,
+            )
+        else:
+            np.save(output_folder / f"_iblqc_ephysTimeRmsAP{tag}.rms.npy", rms)
+            np.save(
+                output_folder / f"_iblqc_ephysTimeRmsAP{tag}.timestamps.npy",
+                rms_times,
+            )
+    else:
+        if tag is None:
+            np.save(output_folder / "_iblqc_ephysTimeRmsLF.rms.npy", rms)
+            np.save(
+                output_folder / "_iblqc_ephysTimeRmsLF.timestamps.npy",
+                rms_times,
+            )
+        else:
+            np.save(output_folder / f"_iblqc_ephysTimeRmsLF{tag}.rms.npy", rms)
+            np.save(
+                output_folder / f"_iblqc_ephysTimeRmsLF{tag}.timestamps.npy",
+                rms_times,
+            )
+
+    if is_lfp:
+        lfp_sample_data = get_random_data_chunks(
+            recording,
+            num_chunks_per_segment=100,
+            chunk_duration="1s",
+            concatenated=True,
+        )
+        psd = np.zeros(
+            (2**14 // 2 + 1, lfp_sample_data.shape[1]), dtype=np.float32
+        )
+        for i_channel in range(lfp_sample_data.shape[1]):
+            freqs, Pxx = welch(
+                lfp_sample_data[:, i_channel],
+                fs=recording.sampling_frequency,
+                nperseg=2**14,
+            )
+            psd[:, i_channel] = Pxx
+
+        freqs = freqs.astype(np.float32)
+        if tag is None:
+            np.save(
+                output_folder / "_iblqc_ephysSpectralDensityLF.power.npy", psd
+            )
+            np.save(
+                output_folder / "_iblqc_ephysSpectralDensityLF.freqs.npy",
+                freqs,
+            )
+        else:
+            np.save(
+                output_folder
+                / f"_iblqc_ephysSpectralDensityLF{tag}.power.npy",
+                psd,
+            )
+            np.save(
+                output_folder
+                / f"_iblqc_ephysSpectralDensityLF{tag}.freqs.npy",
+                freqs,
+            )
+
+
 def extract_continuous(  # noqa: C901
     sorting_folder: Path,
     results_folder: Path,
@@ -955,94 +1053,27 @@ def extract_continuous(  # noqa: C901
 
         print(f"Stream sample rate: {recording_ap.sampling_frequency}")
 
-        n_jobs = 10
-        rms_ap, rms_times_ap = compute_rms(recording_ap, n_jobs=n_jobs)
-        rms_main_ap, rms_times_main_ap = compute_rms(
-            main_recording_ap, n_jobs=n_jobs
+        logging.info("Computing rms on concatenated recording")
+        _save_rms_and_lfp_spectrum(
+            recording_ap,
+            output_folder,
+        )
+        logging.info("Computing rms on main recording")
+        _save_rms_and_lfp_spectrum(
+            main_recording_ap, output_folder, tag="Main"
         )
 
-        rms_main_lfp, rms_times_main_lfp = compute_rms(
-            main_recording_lfp, n_jobs=n_jobs
+        logging.info(
+            "Computing rms and lfp spectrum for LFP stream"
+            " on concatenated recording"
         )
-        rms_lfp, rms_times_lfp = compute_rms(recording_lfp, n_jobs=n_jobs)
-
-        np.save(output_folder / "_iblqc_ephysTimeRmsAP.rms.npy", rms_ap)
-        np.save(
-            output_folder / "_iblqc_ephysTimeRmsAP.timestamps.npy",
-            rms_times_ap,
+        _save_rms_and_lfp_spectrum(recording_lfp, output_folder, is_lfp=True)
+        logging.info(
+            "Computing rms and lfp spectrum for LFP stream"
+            " on main recording"
         )
-
-        np.save(
-            output_folder / "_iblqc_ephysTimeRmsAPMain.rms.npy", rms_main_ap
-        )
-        np.save(
-            output_folder / "_iblqc_ephysTimeRmsAPMain.timestamps.npy",
-            rms_times_main_ap,
-        )
-
-        np.save(output_folder / "_iblqc_ephysTimeRmsLF.rms.npy", rms_lfp)
-        np.save(
-            output_folder / "_iblqc_ephysTimeRmsLF.timestamps.npy",
-            rms_times_lfp,
-        )
-
-        np.save(
-            output_folder / "_iblqc_ephysTimeRmsLFMain.rms.npy", rms_main_lfp
-        )
-        np.save(
-            output_folder / "_iblqc_ephysTimeRmsLFMain.timestamps.npy",
-            rms_times_main_lfp,
-        )
-
-        # main recording
-        lfp_sample_data_main = get_random_data_chunks(
-            main_recording_lfp,
-            num_chunks_per_segment=100,
-            chunk_duration="1s",
-            concatenated=True,
-        )
-        psd = np.zeros(
-            (2**14 // 2 + 1, lfp_sample_data_main.shape[1]), dtype=np.float32
-        )
-        for i_channel in range(lfp_sample_data_main.shape[1]):
-            freqs, Pxx = welch(
-                lfp_sample_data_main[:, i_channel],
-                fs=main_recording_lfp.sampling_frequency,
-                nperseg=2**14,
-            )
-            psd[:, i_channel] = Pxx
-
-        freqs = freqs.astype(np.float32)
-        np.save(
-            output_folder / "_iblqc_ephysSpectralDensityLFMain.power.npy", psd
-        )
-        np.save(
-            output_folder / "_iblqc_ephysSpectralDensityLFMain.freqs.npy",
-            freqs,
-        )
-
-        # concatenated recording
-        lfp_sample_data = get_random_data_chunks(
-            recording_lfp,
-            num_chunks_per_segment=100,
-            chunk_duration="1s",
-            concatenated=True,
-        )
-        psd = np.zeros(
-            (2**14 // 2 + 1, lfp_sample_data.shape[1]), dtype=np.float32
-        )
-        for i_channel in range(lfp_sample_data.shape[1]):
-            freqs, Pxx = welch(
-                lfp_sample_data[:, i_channel],
-                fs=recording_lfp.sampling_frequency,
-                nperseg=2**14,
-            )
-            psd[:, i_channel] = Pxx
-
-        freqs = freqs.astype(np.float32)
-        np.save(output_folder / "_iblqc_ephysSpectralDensityLF.power.npy", psd)
-        np.save(
-            output_folder / "_iblqc_ephysSpectralDensityLF.freqs.npy", freqs
+        _save_rms_and_lfp_spectrum(
+            main_recording_lfp, output_folder, is_lfp=True, tag="Main"
         )
 
         # need appended channel locations
