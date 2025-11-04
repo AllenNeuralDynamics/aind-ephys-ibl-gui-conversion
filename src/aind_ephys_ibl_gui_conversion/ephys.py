@@ -306,6 +306,116 @@ def extract_spikes(  # noqa: C901
         quality_metrics_df.to_csv(output_folder / "clusters.metrics.csv")
 
 
+def _save_lfp_correlation(
+    recording: si.BaseRecording,
+    output_folder: Path,
+    time_to_use_secs: int = 600,
+    num_bins: int = 5,
+    decimation_factor: int = 30,
+    tag: Union[str, None] = None,
+):
+    """
+    Saves LFP correlation arrays for frequency bands
+    to the specfied output folder.
+
+    Correlation is done for delta, theta, alpha, beta,
+    and gamma frequency bands.
+
+    Runs decimation and common median referencing before
+    as preprocessing step
+
+    Parameters
+    ----------
+    recording: si.BaseRecording
+        The recording to run correlation on
+
+    output_folder: Path
+        The output folder to save outputs to
+
+    time_to_use_secs: int, default = 600
+        The time to use when calculating the window
+
+    num_bins: int, default = 5
+        The number of bins to use
+
+    decimation_factor: int, default = 30
+        The value to decimate the recording by
+
+    tag : str or None, optional, default=None
+        An optional tag used to distinguish different outputs.
+        If provided, this string will be included
+        in the filenames for the saved metrics.
+    """
+    logging.info(
+        f"Applying decimation with factor {decimation_factor}"
+    )
+    recording = spre.decimate(recording, decimation_factor=decimation_factor)
+    logging.info(
+        "Applying bandpass filter with freq min 1 "
+        "and freq max 300"
+    )
+    recording = spre.bandpass_filter(recording, freq_min=1, freq_max=300)
+    logging.info(
+        "Applying common median referencing"
+    )
+    recording = spre.common_reference(
+        recording, reference="global", operator="median"
+    )
+    bands = {
+        "delta": [0.5, 4],
+        "theta": [4, 12],
+        "alpha": [12, 30],
+        "beta": [30, 100],
+        "gamma": [100, 300],
+    }
+
+    band_corrs = {band: [] for band in bands}
+    bandpass_filtered_recordings = {}
+    for band, (low_f, high_f) in bands.items():
+        bandpass_filtered_recordings[(band, (low_f, high_f))] = (
+            spre.bandpass_filter(recording, freq_min=low_f, freq_max=high_f)
+        )
+
+    max_time_window = min(time_to_use_secs, recording.get_duration())
+    time_frames = np.linspace(0, max_time_window, num_bins + 1)
+    time_frames_rec = (
+        time_frames * recording.get_sampling_frequency()
+    ).astype(int)
+
+    logging.info(
+        f"Found list of frames to compute correlation {time_frames_rec}"
+    )
+    # calculate lfp correlation
+    for index in range(len(time_frames_rec) - 1):
+        for band, (low_f, high_f) in bands.items():
+            # bandpass
+            D_band = bandpass_filtered_recordings[(band, (low_f, high_f))]
+            # correlation across channels
+            corr_matrix = np.corrcoef(
+                D_band.get_traces(
+                    start_frame=time_frames_rec[index],
+                    end_frame=time_frames_rec[index + 1],
+                ).T
+            )
+            logging.info(
+                f"Processing LFP correlation for band {band}"
+                f"across frames {time_frames_rec[index]} "
+                f"to {time_frames_rec[index + 1]}"
+            )
+            band_corrs[band].append(corr_matrix)
+
+    # average across windows
+    for band in band_corrs:
+        band_corrs[band] = np.nanmean(np.stack(band_corrs[band]), axis=0)
+
+    if tag is None:
+        for band, corr in band_corrs.items():
+            np.save(output_folder / f"{band}_mean_corr.npy", corr)
+    else:
+        for band, corr in band_corrs.items():
+            np.save(output_folder / f"{band}_{tag}_mean_corr.npy", corr)
+
+
 def _save_continous_metrics(
     recording: si.BaseRecording,
     output_folder: Path,
@@ -373,6 +483,9 @@ def _save_continous_metrics(
         The metrics are saved to the `output_folder` specified
         by the user.
     """
+
+    if is_lfp:
+        _save_lfp_correlation(recording, output_folder, tag=tag)
 
     rms_win_length_samples = 2 ** np.ceil(
         np.log2(recording.sampling_frequency * RMS_WIN_LENGTH_SECS)
