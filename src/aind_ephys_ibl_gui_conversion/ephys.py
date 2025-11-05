@@ -102,10 +102,6 @@ def extract_spikes(  # noqa: C901
     probe_names = [s.split(".")[1].split("-")[0] for s in neuropix_streams]
 
     for idx, stream_name in enumerate(neuropix_streams):
-        # Hack to force quad_base only. remove later!
-        if ("-1" not in stream_name) or ("-2" not in stream_name) or ("-3" not in stream_name) or ("-4" not in stream_name):
-            continue
-        
         analyzer_mappings = []
         num_shanks = 0
         shank_glob = tuple(postprocessed_folder.glob(f"*{stream_name}*group*"))
@@ -977,10 +973,6 @@ def extract_continuous(  # noqa: C901
 
     for stream_name, main_recordings_streams in main_recordings.items():
         if "LFP" in stream_name:
-            continue
-
-        # Hack to force quad_base only. remove later!
-        if ("-1" not in stream_name) or ("-2" not in stream_name) or ("-3" not in stream_name) or ("-4" not in stream_name):
             continue
             
         if stream_name in recording_mappings:
