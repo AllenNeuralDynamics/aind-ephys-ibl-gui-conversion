@@ -99,7 +99,9 @@ def extract_spikes(  # noqa: C901
     )
 
     neuropix_streams = [s for s in stream_names if "Neuropix" in s]
-    probe_names = [s.split(".")[1].split("-")[0] for s in neuropix_streams]
+    probe_names = [s.split(".")[1].split("_")[0] for s in neuropix_streams]
+
+    print("Probe names",probe_names)
 
     for idx, stream_name in enumerate(neuropix_streams):
         analyzer_mappings = []
@@ -1027,7 +1029,8 @@ def extract_continuous(  # noqa: C901
 
         print(stream_name)
 
-        probe_name = stream_name.split(".")[1].split("-")[0]
+        probe_name = stream_name.split(".")[1].split("_")[0]
+        print(probe_name)
 
         output_folder = Path(results_folder) / probe_name
 
