@@ -31,7 +31,7 @@ ABS_MAX_TIMESTAMPS_DEVIATION_MS = (
 MAX_NUM_NEGATIVE_TIMESTAMPS = 10
 MAX_TIMESTAMPS_DEVIATION_MS = 1
 
-STREAM_PROBE_REGEX = re.compile(r"^Record Node \d+#[^.]+\.(.+?)(?:-AP|-LFP)?$")
+STREAM_PROBE_REGEX = re.compile(r"^Record Node \d+#[^.]+\.(.+?)(-AP|-LFP)?$")
 
 
 def _stream_to_probe_name(stream_name: str) -> str | None:
