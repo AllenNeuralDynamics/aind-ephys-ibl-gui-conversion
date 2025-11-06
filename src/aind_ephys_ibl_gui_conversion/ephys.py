@@ -32,7 +32,10 @@ MAX_TIMESTAMPS_DEVIATION_MS = 1
 
 
 def extract_spikes(  # noqa: C901
-    sorting_folder, results_folder, min_duration_secs: int = 300
+    sorting_folder,
+    results_folder,
+    min_duration_secs: int = 300,
+    recording_number=1,
 ):
     """
     Extract spike data from a sorting folder and
@@ -58,6 +61,10 @@ def extract_spikes(  # noqa: C901
         long will be processed. The default value is
         300 seconds (5 minutes).
 
+    recording_number: int, optional, default=1
+        Which recording to use for analysis.
+        This will almost always be equal to 1,
+        except in rare cases.
     Returns
     -------
     None
@@ -90,7 +97,9 @@ def extract_spikes(  # noqa: C901
     )
 
     neuropix_streams = [s for s in stream_names if "Neuropix" in s]
-    probe_names = [s.split(".")[1].split("-")[0] for s in neuropix_streams]
+    probe_names = [s.split(".")[1].split("_")[0].split("-AP")[0] for s in neuropix_streams]
+
+    print("Probe names",probe_names)
 
     for idx, stream_name in enumerate(neuropix_streams):
         analyzer_mappings = []
@@ -118,7 +127,7 @@ def extract_spikes(  # noqa: C901
             for shank_index in range(num_shanks):
                 analyzer_folder = (
                     postprocessed_folder / f"experiment1_{stream_name}_"
-                    f"recording1_group{shank_index}.zarr"
+                    f"recording{recording_number}_group{shank_index}.zarr"
                 )
 
                 if analyzer_folder.is_dir():
@@ -126,7 +135,7 @@ def extract_spikes(  # noqa: C901
                 else:
                     analyzer_folder = (
                         postprocessed_folder / f"experiment1_{stream_name}_"
-                        f"recording1_group{shank_index}"
+                        f"recording{recording_number}_group{shank_index}"
                     )
                     if not analyzer_folder.exists():
                         with open(
@@ -149,14 +158,14 @@ def extract_spikes(  # noqa: C901
         else:
             analyzer_folder = (
                 postprocessed_folder
-                / f"experiment1_{stream_name}_recording1.zarr"
+                / f"experiment1_{stream_name}_recording{recording_number}.zarr"
             )
             if analyzer_folder.is_dir():
                 analyzer = si.load_sorting_analyzer(analyzer_folder)
             else:
                 analyzer_folder = (
                     postprocessed_folder
-                    / f"experiment1_{stream_name}_recording1"
+                    / f"experiment1_{stream_name}_recording{recording_number}"
                 )
                 if not analyzer_folder.exists():
                     with open(output_folder / "sorting_error.txt", "w") as f:
@@ -885,10 +894,18 @@ def extract_continuous(  # noqa: C901
             min_duration_secs=min_duration_secs,
         )
 
+    last_slice = {}
+    for ii, key in enumerate(main_recordings.keys()):
+        last_slice[key] = [
+            x.select_segments(x.get_num_segments() - 1)
+            for x in main_recordings[key]
+        ]
+    main_recordings = last_slice
+
     for stream_name, main_recordings_streams in main_recordings.items():
         if "LFP" in stream_name:
             continue
-
+            
         if stream_name in recording_mappings:
             min_samples = min(
                 [
@@ -941,7 +958,8 @@ def extract_continuous(  # noqa: C901
 
         print(stream_name)
 
-        probe_name = stream_name.split(".")[1].split("-")[0]
+        probe_name = stream_name.split(".")[1].split("_")[0].split("-AP")[0]
+        print(probe_name)
 
         output_folder = Path(results_folder) / probe_name
 
