@@ -3,6 +3,7 @@ Functions to process ephys data
 """
 
 import logging
+import re
 from pathlib import Path
 from typing import Union
 
@@ -29,6 +30,51 @@ ABS_MAX_TIMESTAMPS_DEVIATION_MS = (
 
 MAX_NUM_NEGATIVE_TIMESTAMPS = 10
 MAX_TIMESTAMPS_DEVIATION_MS = 1
+
+STREAM_PROBE_REGEX = re.compile(r"^Record Node \d+#[^.]+\.(.+?)(?:-AP|-LFP)?$")
+
+
+def _stream_to_probe_name(stream_name: str) -> str | None:
+    """
+    Extract probe name from Open Ephys stream name.
+
+    Parses stream names from Neuropixels recordings to extract the probe
+    identifier, stripping optional -AP (action potential) or -LFP (local field
+    potential) suffixes.
+
+    Parameters
+    ----------
+    stream_name : str
+        Open Ephys stream name following the pattern:
+        "Record Node {id}#{device}.{probe_name}[-AP|-LFP]"
+
+    Returns
+    -------
+    str or None
+        The extracted probe name (e.g., "ProbeA", "45883-1"), or None if
+        the stream name does not match the expected format.
+
+    Examples
+    --------
+    >>> _stream_to_probe_name("Record Node 104#Neuropix-PXI-100.ProbeA-AP")
+    'ProbeA'
+
+    >>> _stream_to_probe_name("Record Node 109#Neuropix-PXI-100.45883-1")
+    '45883-1'
+
+    >>> _stream_to_probe_name("InvalidFormat")
+    None
+
+    Notes
+    -----
+    The function uses a regular expression to match the Open Ephys stream
+    naming convention. The pattern captures the probe identifier between the
+    last period and optional -AP/-LFP suffix.
+    """
+    m = STREAM_PROBE_REGEX.match(stream_name)
+    if m is not None:
+        return m.group(1)
+    return None
 
 
 def extract_spikes(  # noqa: C901
@@ -90,7 +136,7 @@ def extract_spikes(  # noqa: C901
     )
 
     neuropix_streams = [s for s in stream_names if "Neuropix" in s]
-    probe_names = [s.split(".")[1].split("-")[0] for s in neuropix_streams]
+    probe_names = [_stream_to_probe_name(s) for s in neuropix_streams]
 
     for idx, stream_name in enumerate(neuropix_streams):
         analyzer_mappings = []
@@ -941,7 +987,7 @@ def extract_continuous(  # noqa: C901
 
         print(stream_name)
 
-        probe_name = stream_name.split(".")[1].split("-")[0]
+        probe_name = _stream_to_probe_name(stream_name)
 
         output_folder = Path(results_folder) / probe_name
 
