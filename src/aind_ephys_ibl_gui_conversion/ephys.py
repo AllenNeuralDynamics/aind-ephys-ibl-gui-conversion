@@ -1049,7 +1049,7 @@ def extract_continuous(  # noqa: C901
 
         logging.info(
             "Low pass filtering LFP concatenated recording "
-            f"with min freq {lfp_freq_min} and max fre {lfp_freq_max}"
+            f"with min freq {lfp_freq_min} and max freq {lfp_freq_max}"
         )
         recording_lfp_low_pass = spre.bandpass_filter(
             recording_lfp, freq_min=lfp_freq_min, freq_max=lfp_freq_max
@@ -1062,14 +1062,14 @@ def extract_continuous(  # noqa: C901
         )
 
         logging.info(
-            "Low pass filtering LFP concatenated recording "
-            f"with min freq {lfp_freq_min} and max fre {lfp_freq_max}"
+            "Low pass filtering LFP main recording "
+            f"with min freq {lfp_freq_min} and max freq {lfp_freq_max}"
         )
         main_recording_lfp_low_pass = spre.bandpass_filter(
             main_recording_lfp, freq_min=lfp_freq_min, freq_max=lfp_freq_max
         )
         logging.info(
-            f"Resampling LFP concatenated recording to {lfp_resampling_rate}"
+            f"Resampling LFP main recording to {lfp_resampling_rate}"
         )
         main_recording_lfp = spre.resample(
             main_recording_lfp_low_pass, resample_rate=lfp_resampling_rate
