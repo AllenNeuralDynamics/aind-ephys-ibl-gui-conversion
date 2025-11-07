@@ -1024,13 +1024,12 @@ def extract_continuous(  # noqa: C901
                 for recording in main_recordings[stream_name]
             ]
         )
-        main_recording_lfp = spre.highpass_filter(
-            [
+        main_recording_lfp = [
                 recording
                 for recording in main_recordings[stream_name]
                 if recording.get_num_samples() == max_samples_lfp
-            ][0]
-        )
+        ][0]
+        
 
         max_samples_ap = max(
             [
@@ -1051,7 +1050,18 @@ def extract_continuous(  # noqa: C901
         )
         channel_inds = np.arange(recording_ap.get_num_channels())
 
-        print(f"Stream sample rate: {recording_ap.sampling_frequency}")
+        print(f"Stream sample rate AP: {recording_ap.sampling_frequency}")
+
+        logging.info("Low pass filtering LFP concatenated recording")
+        recording_lfp_low_pass = spre.bandpass_filter(recording_lfp, freq_min=1, freq_max=300)
+        logging.info("Resampling LFP concatenated recording to 1kHZ")
+        recording_lfp = spre.resample(recording_lfp_low_pass, resample_rate=1000)
+
+        logging.info("Low pass filtering LFP main recording")
+        main_recording_lfp_low_pass = spre.bandpass_filter(main_recording_lfp, freq_min=1, freq_max=300)
+        logging.info("Resampling LFP main recording to 1kHZ")
+        main_recording_lfp = spre.resample(main_recording_lfp_low_pass, resample_rate=1000)
+
 
         logging.info("Computing rms on concatenated recording")
         _save_rms_and_lfp_spectrum(
