@@ -668,7 +668,7 @@ def get_mappings(  # noqa: C901
     return main_recordings, recording_mappings
 
 
-def _save_rms_and_lfp_spectrum(
+def save_rms_and_lfp_spectrum(
     recording: si.BaseRecording,
     output_folder: Path,
     n_jobs: int = 10,
@@ -733,14 +733,23 @@ def _save_rms_and_lfp_spectrum(
             chunk_duration="1s",
             concatenated=True,
         )
+        fs = recording.sampling_frequency
+
+        # Target frequency resolution for PSD (0.5 Hz)
+        target_freq_resolution = 0.5
+        nperseg = int(fs / target_freq_resolution)
+        nperseg = 2 ** int(np.log2(nperseg))  # round to nearest power of 2
+
+        # Preallocate PSD array
         psd = np.zeros(
-            (2**14 // 2 + 1, lfp_sample_data.shape[1]), dtype=np.float32
+            (nperseg // 2 + 1, lfp_sample_data.shape[1]), dtype=np.float32
         )
+
         for i_channel in range(lfp_sample_data.shape[1]):
             freqs, Pxx = welch(
                 lfp_sample_data[:, i_channel],
                 fs=recording.sampling_frequency,
-                nperseg=2**14,
+                nperseg=nperseg,
             )
             psd[:, i_channel] = Pxx
 
@@ -774,6 +783,7 @@ def extract_continuous(  # noqa: C901
     lfp_resampling_rate: float = 1000,
     lfp_freq_min: float = 1,
     lfp_freq_max: float = 300,
+    num_parallel_jobs: int = 10,
     use_lfp_cmr: bool = False,
 ):
     """
@@ -824,6 +834,9 @@ def extract_continuous(  # noqa: C901
     lfp_freq_max: float, default = 300,
         The max cutoff frequency to low pass filter
         LFP recording
+
+    num_parallel_jobs: int, default = 10
+        Number of parallel jobs to use
 
     use_lfp_cmr : bool, optional, default=False
         If `True`, the function will use the local
@@ -1068,34 +1081,40 @@ def extract_continuous(  # noqa: C901
         main_recording_lfp_low_pass = spre.bandpass_filter(
             main_recording_lfp, freq_min=lfp_freq_min, freq_max=lfp_freq_max
         )
-        logging.info(
-            f"Resampling LFP main recording to {lfp_resampling_rate}"
-        )
+        logging.info(f"Resampling LFP main recording to {lfp_resampling_rate}")
         main_recording_lfp = spre.resample(
             main_recording_lfp_low_pass, resample_rate=lfp_resampling_rate
         )
 
         logging.info("Computing rms on concatenated recording")
-        _save_rms_and_lfp_spectrum(
-            recording_ap,
-            output_folder,
+        save_rms_and_lfp_spectrum(
+            recording_ap, output_folder, n_jobs=num_parallel_jobs
         )
         logging.info("Computing rms on main recording")
-        _save_rms_and_lfp_spectrum(
-            main_recording_ap, output_folder, tag="Main"
+        save_rms_and_lfp_spectrum(
+            main_recording_ap,
+            output_folder,
+            tag="Main",
+            n_jobs=num_parallel_jobs,
         )
 
         logging.info(
             "Computing rms and lfp spectrum for LFP stream"
             " on concatenated recording"
         )
-        _save_rms_and_lfp_spectrum(recording_lfp, output_folder, is_lfp=True)
+        save_rms_and_lfp_spectrum(
+            recording_lfp, output_folder, is_lfp=True, n_jobs=num_parallel_jobs
+        )
         logging.info(
             "Computing rms and lfp spectrum for LFP stream"
             " on main recording"
         )
-        _save_rms_and_lfp_spectrum(
-            main_recording_lfp, output_folder, is_lfp=True, tag="Main"
+        save_rms_and_lfp_spectrum(
+            main_recording_lfp,
+            output_folder,
+            is_lfp=True,
+            tag="Main",
+            n_jobs=num_parallel_jobs,
         )
 
         # need appended channel locations
