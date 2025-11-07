@@ -3,6 +3,7 @@ Functions to process ephys data
 """
 
 import logging
+from collections import defaultdict
 from pathlib import Path
 from typing import Union
 
@@ -442,166 +443,54 @@ def get_ecephys_stream_names(base_folder: Path) -> tuple[list[str], Path, int]:
     return neuropix_streams, ecephys_compressed_folder, num_blocks
 
 
-def _reset_recordings(
-    recording: si.BaseRecording, recording_name: str
-) -> None:
+
+def process_lfp_stream(recording: si.BaseRecording, is_1_0_probe: bool, freq_min: float, freq_max: float, decimation_factor: int) -> si.BaseRecording:
     """
-    Resets the timestamps of the recording if certain conditions are met.
-
-    This function checks the timestamp differences within
-    the recording for potential issues.
-    If the following conditions are encountered:
-    1. The number of negative timestamp differences
-       exceeds the threshold (`MAX_NUM_NEGATIVE_TIMESTAMPS`).
-    2. The maximum absolute time difference between
-       timestamps exceeds the threshold (`ABS_MAX_TIMESTAMPS_DEVIATION_MS`).
-
-    If either condition is true, the recording's
-    timestamps are reset, and a message is logged indicating the issue.
-
-    Parameters:
-    ----------
-    recording : si.BaseRecording
-        The recording object containing timestamp data to be checked.
-
-    recording_name : str
-        The name of the recording, used for logging purposes.
+    Processes the LFP stream
     """
+    if is_1_0_probe: # 1.0 probe, only need to bandpass
+        return spre.bandpass_filter(recording, freq_min=freq_min, freq_max=freq_max)
+    else: # 2.0 probe, decimate to 1250
+        recording_lfp_bandpass = spre.bandpass_filter(recording, freq_min=freq_min, freq_max=freq_max)
+        return spre.decimate(recording_lfp_bandpass, decimation_factor=decimation_factor)
 
-    # timestamps should be monotonically increasing,
-    # but we allow for small glitches
-    skip_times = False
-    for segment_index in range(recording.get_num_segments()):
-        times = recording.get_times(segment_index=segment_index)
-        times_diff_ms = np.diff(times) * 1000
-        num_negative_times = np.sum(
-            times_diff_ms < -ACCEPTED_NEGATIVE_DEVIATION_MS
+def get_neuropixel_lfp_stream(recording: si.BaseRecording, stream_name: str, ecephys_compressed_folder: Path, block_index: int) -> tuple[si.BaseRecording, bool]:
+    """
+    Returns the LFP recording and whether or not the recording is 
+    a 1.0 probe or not
+    """
+    if "AP" in stream_name: # 1.0 probe - seperate stream
+        stream_name_lfp = stream_name.replace("AP", "LFP")
+        recording_group_lfp = si.read_zarr(
+            ecephys_compressed_folder
+            / f"experiment{block_index + 1}_{stream_name_lfp}.zarr"
         )
+        recording_lfp = recording_group_lfp
+        is_1_0_probe = True
+    else: # 2.0 probe
+        recording_lfp = recording
+        is_1_0_probe = False
+    
+    return recording_lfp, is_1_0_probe
 
-        if num_negative_times > MAX_NUM_NEGATIVE_TIMESTAMPS:
-            logging.info(
-                f"\t{recording_name}:\n\t\tSkipping "
-                "timestamps for too many negative "
-                f"timestamps diffs below {ACCEPTED_NEGATIVE_DEVIATION_MS}: "
-                f"{num_negative_times}"
-            )
-            skip_times = True
-            break
-        max_time_diff_ms = np.max(np.abs(times_diff_ms))
-        if max_time_diff_ms > ABS_MAX_TIMESTAMPS_DEVIATION_MS:
-            logging.info(
-                f"\t{recording_name}:\n\t\tSkipping timestamps for too "
-                f"large time diff deviation: {max_time_diff_ms} ms"
-            )
-            skip_times = True
-            break
-
-    if skip_times:
-        recording.reset_times()
-
-
-def get_mappings(  # noqa: C901
-    main_recordings: dict,
-    recording_mappings: dict,
+def get_stream_mappings(
     neuropix_streams: list,
     num_blocks: int,
     ecephys_compressed_folder: Path,
     min_duration_secs: int = 300,
-) -> tuple[dict, dict]:
-    """
-    Generate mappings for the ecephys data streams
-    and their corresponding recording blocks.
+    freq_min: float = 1,
+    freq_max: float = 300,
+    decimation_factor: int = 24
+) -> tuple[dict, dict, dict, dict]:
+    main_recordings_ap = defaultdict(list)
+    surface_recordings_ap = defaultdict(list)
 
-    This function takes in the details of the
-    main recordings and their mappings, along with information
-    about the neuropix streams, to generate two mappings:
-    one for the data streams and another for the
-    associated blocks. The mappings are returned as dictionaries.
+    main_recordings_lfp = defaultdict(list)
+    surface_recordings_lfp = defaultdict(list)
 
-    Parameters
-    ----------
-    main_recordings : dict
-        A dictionary where keys represent unique
-        identifiers for recordings and values are
-        metadata or objects associated with those recordings.
-        This can include details about the
-        recording setup, time, and related information.
-
-    recording_mappings : dict
-        A dictionary containing mappings of recording
-        that are short in duration, i.e. surface recording
-
-    neuropix_streams : list of str
-        A list of stream names or identifiers for
-        the neuropix data streams. These streams typically
-        correspond to the raw or processed data
-        associated with the ecephys recordings.
-
-    num_blocks : int
-        The total number of blocks to consider
-        when generating the mappings. This will typically
-        correspond to chunks or sections of the
-        recordings that are processed or analyzed separately.
-
-    ecephys_compressed_folder : Path
-        The path to the folder where compressed
-        ecephys data is stored. This folder may contain data
-        in a format that needs to be uncompressed or
-        processed for further use.
-
-    min_duration_secs : int, optional, default=300
-        The minimum duration (in seconds) that a recording
-        must have in order to be included in the
-        mapping process. This can be useful to
-        filter out short-duration recordings that are not
-        relevant for further analysis.
-
-    Returns
-    -------
-    tuple of (dict, dict)
-        - A dictionary representing the
-          mapping of ecephys data streams to their respective
-          recordings and blocks.
-        - A second dictionary mapping recording
-          identifiers to specific block details or additional
-          metadata.
-
-    Raises
-    ------
-    ValueError
-        If there is an inconsistency between the
-        `main_recordings` and `recording_mappings`, such
-        as missing or mismatched data.
-
-    FileNotFoundError
-        If the `ecephys_compressed_folder`
-        does not exist or cannot be accessed.
-
-    KeyError
-        If a required key is missing in any of
-        the dictionaries (`main_recordings`, `recording_mappings`).
-
-    Notes
-    -----
-    - The function assumes that the `main_recordings` and
-      `recording_mappings` dictionaries are properly
-      structured and contain relevant information for
-      generating the mappings.
-    - The `min_duration_secs` parameter helps exclude
-      recordings that are too short to be of interest
-      for further analysis.
-    - The returned mappings can be used for
-      efficiently organizing and accessing specific parts of
-      the ecephys data based on stream and block identifiers.
-    """
     for idx, stream_name in enumerate(neuropix_streams):
-        has_lfp = False
         if "LFP" in stream_name:
             continue
-        elif "AP" in stream_name:
-            has_lfp = True
-        else:  # 2.0
-            has_lfp = True
 
         for block_index in range(num_blocks):
             recording = si.read_zarr(
@@ -609,64 +498,28 @@ def get_mappings(  # noqa: C901
                 / f"experiment{block_index + 1}_{stream_name}.zarr"
             )
             recording_groups = recording.split_by("group")
-            if "AP" in stream_name:
-                stream_name_lfp = stream_name.replace("AP", "LFP")
-                recording_lfp = si.read_zarr(
-                    ecephys_compressed_folder
-                    / f"experiment{block_index + 1}_{stream_name_lfp}.zarr"
-                )
-                recording_groups_lfp = recording_lfp.split_by("group")
-            else:
-                recording_groups_lfp = recording_groups
 
             for group in recording_groups:
+                logging.info(
+                    f"Processing stream {stream_name} for block {block_index} and group {group}"
+                )
                 recording_group = recording_groups[group]
+                
+                recording_time = (recording_group.get_num_samples() / recording_group.sampling_frequency)
+                recording_group_ap_highpass = spre.highpass_filter(recording_group)
 
-                if "AP" not in stream_name and "LFP" not in stream_name:
-                    key = f"{stream_name}-AP"
+                recording_lfp, is_1_0_probe = get_neuropixel_lfp_stream(recording_group, stream_name, ecephys_compressed_folder, block_index)
+                recording_lfp_processed = process_lfp_stream(recording_lfp, is_1_0_probe, freq_min, freq_max, decimation_factor)
+
+                # assume this is a surface finding recording
+                if recording_time < min_duration_secs:
+                    surface_recordings_ap[stream_name].append(recording_group_ap_highpass)
+                    surface_recordings_lfp[stream_name].append(recording_lfp_processed)
                 else:
-                    key = stream_name
-
-                _reset_recordings(recording_group, key)
-                if recording_group.get_total_duration() < min_duration_secs:
-                    if key not in recording_mappings:
-                        recording_mappings[key] = [recording_group]
-                    else:
-                        recording_mappings[key].append(recording_group)
-                else:
-                    if key not in main_recordings:
-                        main_recordings[key] = [recording_group]
-                    else:
-                        main_recordings[key].append(recording_group)
-
-                if has_lfp:
-                    key = key.replace("AP", "LFP")
-
-                    _reset_recordings(recording_groups_lfp[group], key)
-                    if (
-                        recording_groups_lfp[group].get_total_duration()
-                        < min_duration_secs
-                    ):
-                        if key not in recording_mappings:
-                            recording_mappings[key] = [
-                                recording_groups_lfp[group]
-                            ]
-                        else:
-                            recording_mappings[key].append(
-                                recording_groups_lfp[group]
-                            )
-                    else:
-                        if key not in main_recordings:
-                            main_recordings[key] = [
-                                recording_groups_lfp[group]
-                            ]
-                        else:
-                            main_recordings[key].append(
-                                recording_groups_lfp[group]
-                            )
-
-    return main_recordings, recording_mappings
-
+                    main_recordings_ap[stream_name].append(recording_group_ap_highpass)
+                    main_recordings_lfp[stream_name].append(recording_lfp_processed)
+    
+    return main_recordings_ap, surface_recordings_ap, main_recordings_lfp, surface_recordings_lfp
 
 def save_rms_and_lfp_spectrum(
     recording: si.BaseRecording,
