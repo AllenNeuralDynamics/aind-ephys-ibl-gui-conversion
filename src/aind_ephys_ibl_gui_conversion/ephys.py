@@ -1043,22 +1043,34 @@ def extract_continuous(  # noqa: C901
         )
         channel_inds = np.arange(recording_ap.get_num_channels())
 
-        print(f"Stream sample rate AP: {recording_ap.sampling_frequency}")
+        logging.info(
+            f"Stream sample rate AP: {recording_ap.sampling_frequency}"
+        )
 
-        logging.info("Low pass filtering LFP concatenated recording")
+        logging.info(
+            "Low pass filtering LFP concatenated recording "
+            f"with min freq {lfp_freq_min} and max fre {lfp_freq_max}"
+        )
         recording_lfp_low_pass = spre.bandpass_filter(
             recording_lfp, freq_min=lfp_freq_min, freq_max=lfp_freq_max
         )
-        logging.info("Resampling LFP concatenated recording to 1kHZ")
+        logging.info(
+            f"Resampling LFP concatenated recording to {lfp_resampling_rate}"
+        )
         recording_lfp = spre.resample(
             recording_lfp_low_pass, resample_rate=lfp_resampling_rate
         )
 
-        logging.info("Low pass filtering LFP main recording")
+        logging.info(
+            "Low pass filtering LFP concatenated recording "
+            f"with min freq {lfp_freq_min} and max fre {lfp_freq_max}"
+        )
         main_recording_lfp_low_pass = spre.bandpass_filter(
             main_recording_lfp, freq_min=lfp_freq_min, freq_max=lfp_freq_max
         )
-        logging.info("Resampling LFP main recording to 1kHZ")
+        logging.info(
+            f"Resampling LFP concatenated recording to {lfp_resampling_rate}"
+        )
         main_recording_lfp = spre.resample(
             main_recording_lfp_low_pass, resample_rate=lfp_resampling_rate
         )
