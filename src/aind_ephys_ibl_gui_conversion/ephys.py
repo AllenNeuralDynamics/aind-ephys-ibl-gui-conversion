@@ -1028,6 +1028,10 @@ def extract_continuous(  # noqa: C901
                 ]
             ]
         )
+        logging.info("High pass filtering concatenated AP recording")
+        recording_ap = spre.highpass_filter(recording_ap)
+
+        logging.info("High pass filtering main AP recording")
         main_recording_ap = spre.highpass_filter(
             [
                 recording
