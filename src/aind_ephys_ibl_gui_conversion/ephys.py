@@ -771,6 +771,9 @@ def extract_continuous(  # noqa: C901
     results_folder: Path,
     min_duration_secs: int = 300,
     probe_surface_finding: Union[Path, None] = None,
+    lfp_resampling_rate: float = 1000,
+    lfp_freq_min: float = 1,
+    lfp_freq_max: float = 300,
     use_lfp_cmr: bool = False,
 ):
     """
@@ -811,6 +814,17 @@ def extract_continuous(  # noqa: C901
         filtering of the data based on probe configuration.
         If not provided, no surface finding data will be used.
 
+    lfp_resampling_rate: float, default = 1000
+        The rate to resample the LFP recording
+
+    lfp_freq_min: float, defaut = 1,
+        The min cutoff frequency to low pass filter
+        LFP recording
+
+    lfp_freq_max: float, default = 300,
+        The max cutoff frequency to low pass filter
+        LFP recording
+
     use_lfp_cmr : bool, optional, default=False
         If `True`, the function will use the local
         field potential (LFP) continuous metric results
@@ -822,30 +836,6 @@ def extract_continuous(  # noqa: C901
         This function does not return any value.
         The processed continuous data is saved to the
         `results_folder` specified by the user.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the `sorting_folder` or `results_folder`
-        do not exist or cannot be accessed.
-
-    ValueError
-        If the `min_duration_secs` is negative or
-        invalid, or if there are issues with the
-        probe surface finding file.
-
-    Notes
-    -----
-    - The function assumes that the `sorting_folder`
-      contains valid sorted data.
-    - The extracted continuous data will be saved
-      in a format suitable for further analysis,
-      depending on the type of data processed (e.g., LFP, spike data).
-    - If `probe_surface_finding` is provided, it
-      must be in a compatible format for additional processing.
-    - The `use_lfp_cmr` option should be set to
-      `True` if the analysis involves local field potentials
-      and associated metrics.
     """
 
     session_folder = Path(str(sorting_folder).split("_sorted")[0])
@@ -1053,20 +1043,20 @@ def extract_continuous(  # noqa: C901
 
         logging.info("Low pass filtering LFP concatenated recording")
         recording_lfp_low_pass = spre.bandpass_filter(
-            recording_lfp, freq_min=1, freq_max=300
+            recording_lfp, freq_min=lfp_freq_min, freq_max=lfp_freq_max
         )
         logging.info("Resampling LFP concatenated recording to 1kHZ")
         recording_lfp = spre.resample(
-            recording_lfp_low_pass, resample_rate=1000
+            recording_lfp_low_pass, resample_rate=lfp_resampling_rate
         )
 
         logging.info("Low pass filtering LFP main recording")
         main_recording_lfp_low_pass = spre.bandpass_filter(
-            main_recording_lfp, freq_min=1, freq_max=300
+            main_recording_lfp, freq_min=lfp_freq_min, freq_max=lfp_freq_max
         )
         logging.info("Resampling LFP main recording to 1kHZ")
         main_recording_lfp = spre.resample(
-            main_recording_lfp_low_pass, resample_rate=1000
+            main_recording_lfp_low_pass, resample_rate=lfp_resampling_rate
         )
 
         logging.info("Computing rms on concatenated recording")
