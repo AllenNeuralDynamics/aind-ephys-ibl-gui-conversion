@@ -905,9 +905,7 @@ def process_raw_data(
         The function saves the computed RMS and LFP spectrum results
         to disk and does not return any value.
     """
-    probe_name = stream_name.split(".")[1].split("-")[
-        0
-    ]  # TODO: replace with Galen's probe naming util
+    probe_name = _stream_to_probe_name(stream_name)
     output_folder = Path(results_folder) / probe_name
     logging.info(
         f"Creating output directory at {output_folder}" " if it does not exist"
