@@ -65,6 +65,10 @@ exclude = '''
 )
 '''
 
+[tool.ruff]
+line-length = 79
+target-version = 'py310'
+
 [tool.coverage.run]
 omit = ["*__init__*"]
 source = ["aind-ephys-ibl-gui-conversion", "tests"]
