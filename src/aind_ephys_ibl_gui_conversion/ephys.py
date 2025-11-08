@@ -913,9 +913,10 @@ def process_raw_data(
     )
     output_folder.mkdir(exist_ok=True)
 
+    logging.info(f"LFP Stream: {is_lfp}")
     if recording_combined is not None:
         logging.info(
-            "Running RMS and LFP spectrum (if LFP recording) "
+            "Running RMS and LFP spectrum (if LFP stream) "
             f"on concatenated recording for stream {stream_name}"
         )
         save_rms_and_lfp_spectrum(
@@ -923,7 +924,7 @@ def process_raw_data(
         )
 
     logging.info(
-        "Running RMS and LFP spectrum (if LFP recording) "
+        "Running RMS and LFP spectrum (if LFP stream) "
         f"on main recording for stream {stream_name}"
     )
     save_rms_and_lfp_spectrum(
