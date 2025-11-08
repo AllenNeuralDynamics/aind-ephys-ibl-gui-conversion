@@ -1037,7 +1037,7 @@ def extract_continuous(
             list(main_recordings_lfp.values())
         )
         logging.info(
-            "Processing raw LFP data - Computing rms " "and LFP Spectrum"
+            "Processing raw LFP data - Computing rms and LFP Spectrum"
         )
         process_raw_data(
             main_recording_lfp,
