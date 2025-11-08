@@ -3,6 +3,7 @@ Functions to process ephys data
 """
 
 import logging
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Union
