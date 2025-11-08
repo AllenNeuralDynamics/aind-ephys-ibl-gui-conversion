@@ -17,20 +17,6 @@ from spikeinterface.core import get_random_data_chunks
 from spikeinterface.exporters import export_to_phy
 from spikeinterface.exporters.to_ibl import compute_rms
 
-# here we define some constants used for defining if timestamps are ok
-# or should be skipped
-ACCEPTED_NEGATIVE_DEVIATION_MS = (
-    0.2  # we allow for small negative timestamps diff glitches
-)
-# maximum number of negative timestamps allowed below the accepted deviation
-MAX_NUM_NEGATIVE_TIMESTAMPS = 10
-ABS_MAX_TIMESTAMPS_DEVIATION_MS = (
-    2  # absolute maximum deviation allowed for timestamps (also positive)
-)
-
-MAX_NUM_NEGATIVE_TIMESTAMPS = 10
-MAX_TIMESTAMPS_DEVIATION_MS = 1
-
 
 def extract_spikes(  # noqa: C901
     sorting_folder, results_folder, min_duration_secs: int = 300
@@ -416,8 +402,13 @@ def get_ecephys_stream_names(base_folder: Path) -> tuple[list[str], Path, int]:
     return neuropix_streams, ecephys_compressed_folder, num_blocks
 
 
-
-def process_lfp_stream(recording: si.BaseRecording, is_1_0_probe: bool, freq_min: float, freq_max: float, decimation_factor: int) -> si.BaseRecording:
+def process_lfp_stream(
+    recording: si.BaseRecording,
+    is_1_0_probe: bool,
+    freq_min: float,
+    freq_max: float,
+    decimation_factor: int,
+) -> si.BaseRecording:
     """
     Apply LFP preprocessing to a Neuropixels recording.
 
@@ -438,32 +429,45 @@ def process_lfp_stream(recording: si.BaseRecording, is_1_0_probe: bool, freq_min
     freq_max : float
         The upper cutoff frequency for the bandpass filter (in Hz).
     decimation_factor : int
-        The factor by which to downsample the signal (only used for 2.0 probes).
+        The factor by which to downsample the
+        signal (only used for 2.0 probes).
 
     Returns
     -------
     si.BaseRecording
-        The processed LFP recording after filtering (and decimation if applicable).
+        The processed LFP recording after
+        filtering (and decimation if applicable).
     """
-    if is_1_0_probe: # 1.0 probe, only need to bandpass
+    if is_1_0_probe:  # 1.0 probe, only need to bandpass
         logging.info(
-            f"1.0 Probe found. Applying bandpass filter with freq min {freq_min} "
+            f"1.0 Probe found. Applying bandpass filter "
+            f"with freq min {freq_min} "
             f"and freq max {freq_max}"
         )
-        return spre.bandpass_filter(recording, freq_min=freq_min, freq_max=freq_max)
-    else: # 2.0 probe, decimate to 1250
+        return spre.bandpass_filter(
+            recording, freq_min=freq_min, freq_max=freq_max
+        )
+    else:  # 2.0 probe, decimate to 1250
         logging.info("Found 2.0 probe")
         logging.info(
             f"Applying bandpass filter with freq min {freq_min} "
             f"and freq max {freq_max}"
         )
-        recording_lfp_bandpass = spre.bandpass_filter(recording, freq_min=freq_min, freq_max=freq_max)
-        logging.info(
-            f"Applying decimation with factor {decimation_factor}"
+        recording_lfp_bandpass = spre.bandpass_filter(
+            recording, freq_min=freq_min, freq_max=freq_max
         )
-        return spre.decimate(recording_lfp_bandpass, decimation_factor=decimation_factor)
+        logging.info(f"Applying decimation with factor {decimation_factor}")
+        return spre.decimate(
+            recording_lfp_bandpass, decimation_factor=decimation_factor
+        )
 
-def get_neuropixel_lfp_stream(recording: si.BaseRecording, stream_name: str, ecephys_compressed_folder: Path, block_index: int) -> tuple[si.BaseRecording, bool]:
+
+def get_neuropixel_lfp_stream(
+    recording: si.BaseRecording,
+    stream_name: str,
+    ecephys_compressed_folder: Path,
+    block_index: int,
+) -> tuple[si.BaseRecording, bool]:
     """
     Retrieve the appropriate LFP recording for a given Neuropixels stream.
 
@@ -479,7 +483,8 @@ def get_neuropixel_lfp_stream(recording: si.BaseRecording, stream_name: str, ece
     stream_name : str
         The name of the Neuropixels stream (e.g., "probeA-AP" or "probeA-LFP").
     ecephys_compressed_folder : Path
-        Path to the folder containing the compressed Zarr files for each stream.
+        Path to the folder containing the compressed Zarr files
+        for each stream.
     block_index : int
         Index of the experiment block to load (used to build the filename).
 
@@ -488,10 +493,11 @@ def get_neuropixel_lfp_stream(recording: si.BaseRecording, stream_name: str, ece
     tuple[si.BaseRecording, bool]
         A tuple containing:
         - The LFP recording extractor (`si.BaseRecording`).
-        - A boolean flag indicating whether the probe is Neuropixels 1.0 (`True`)
+        - A boolean flag indicating whether the probe is
+          Neuropixels 1.0 (`True`)
           or Neuropixels 2.0 (`False`).
     """
-    if "AP" in stream_name: # 1.0 probe - seperate stream
+    if "AP" in stream_name:  # 1.0 probe - seperate stream
         stream_name_lfp = stream_name.replace("AP", "LFP")
         recording_group_lfp = si.read_zarr(
             ecephys_compressed_folder
@@ -499,11 +505,12 @@ def get_neuropixel_lfp_stream(recording: si.BaseRecording, stream_name: str, ece
         )
         recording_lfp = recording_group_lfp
         is_1_0_probe = True
-    else: # 2.0 probe
+    else:  # 2.0 probe
         recording_lfp = recording
         is_1_0_probe = False
-    
+
     return recording_lfp, is_1_0_probe
+
 
 def get_stream_mappings(
     neuropix_streams: list,
@@ -512,7 +519,7 @@ def get_stream_mappings(
     min_duration_secs: int = 300,
     freq_min: float = 1,
     freq_max: float = 300,
-    decimation_factor: int = 24
+    decimation_factor: int = 24,
 ) -> tuple[dict, dict, dict, dict]:
     """
     Generate mappings between Neuropixels streams and their corresponding
@@ -520,7 +527,7 @@ def get_stream_mappings(
     surface-finding (short) recordings.
 
     This function reads Neuropixels recording data from compressed Zarr files,
-    splits them by hardware groups, and applies appropriate preprocessing:
+    splits them by recording groups, and applies appropriate preprocessing:
     - AP data: high-pass filtered.
     - LFP data: bandpass filtered (and decimated for 2.0 probes).
 
@@ -541,21 +548,28 @@ def get_stream_mappings(
         Minimum duration (in seconds) separating main from surface recordings.
         Defaults to 300 seconds.
     freq_min : float, optional
-        Lower cutoff frequency (Hz) for LFP bandpass filtering. Defaults to 1 Hz.
+        Lower cutoff frequency (Hz) for LFP bandpass filtering.
+        Defaults to 1 Hz.
     freq_max : float, optional
-        Upper cutoff frequency (Hz) for LFP bandpass filtering. Defaults to 300 Hz.
+        Upper cutoff frequency (Hz) for LFP bandpass filtering.
+        Defaults to 300 Hz.
     decimation_factor : int, optional
-        Downsampling factor for LFP streams (used only for Neuropixels 2.0 probes).
+        Downsampling factor for LFP streams
+        (used only for Neuropixels 2.0 probes).
         Defaults to 24.
 
     Returns
     -------
     tuple[dict, dict, dict, dict]
         A tuple of four dictionaries (each a `defaultdict(list)`):
-        - `main_recordings_ap`: High-pass filtered AP recordings for main sessions.
-        - `surface_recordings_ap`: High-pass filtered AP recordings for surface sessions.
-        - `main_recordings_lfp`: Processed LFP recordings for main sessions.
-        - `surface_recordings_lfp`: Processed LFP recordings for surface sessions.
+        - `main_recordings_ap`: High-pass filtered AP recordings
+           for main sessions.
+        - `surface_recordings_ap`: High-pass filtered AP
+           recordings for surface sessions.
+        - `main_recordings_lfp`: Processed LFP recordings
+           for main sessions.
+        - `surface_recordings_lfp`: Processed LFP recordings
+          for surface sessions.
     """
     main_recordings_ap = defaultdict(list)
     surface_recordings_ap = defaultdict(list)
@@ -576,26 +590,57 @@ def get_stream_mappings(
 
             for group in recording_groups:
                 logging.info(
-                    f"Processing stream {stream_name} for block {block_index} and group {group}"
+                    f"Processing stream {stream_name} for block "
+                    f"{block_index} and group {group}"
                 )
                 recording_group = recording_groups[group]
-                
-                recording_time = (recording_group.get_num_samples() / recording_group.sampling_frequency)
-                logging.info("Applying high pass filter to AP stream")
-                recording_group_ap_highpass = spre.highpass_filter(recording_group)
 
-                recording_lfp, is_1_0_probe = get_neuropixel_lfp_stream(recording_group, stream_name, ecephys_compressed_folder, block_index)
-                recording_lfp_processed = process_lfp_stream(recording_lfp, is_1_0_probe, freq_min, freq_max, decimation_factor)
+                recording_time = (
+                    recording_group.get_num_samples()
+                    / recording_group.sampling_frequency
+                )
+                logging.info("Applying high pass filter to AP stream")
+                recording_group_ap_highpass = spre.highpass_filter(
+                    recording_group
+                )
+
+                recording_lfp, is_1_0_probe = get_neuropixel_lfp_stream(
+                    recording_group,
+                    stream_name,
+                    ecephys_compressed_folder,
+                    block_index,
+                )
+                recording_lfp_processed = process_lfp_stream(
+                    recording_lfp,
+                    is_1_0_probe,
+                    freq_min,
+                    freq_max,
+                    decimation_factor,
+                )
 
                 # assume this is a surface finding recording
                 if recording_time < min_duration_secs:
-                    surface_recordings_ap[stream_name].append(recording_group_ap_highpass)
-                    surface_recordings_lfp[stream_name].append(recording_lfp_processed)
+                    surface_recordings_ap[stream_name].append(
+                        recording_group_ap_highpass
+                    )
+                    surface_recordings_lfp[stream_name].append(
+                        recording_lfp_processed
+                    )
                 else:
-                    main_recordings_ap[stream_name].append(recording_group_ap_highpass)
-                    main_recordings_lfp[stream_name].append(recording_lfp_processed)
-    
-    return main_recordings_ap, surface_recordings_ap, main_recordings_lfp, surface_recordings_lfp
+                    main_recordings_ap[stream_name].append(
+                        recording_group_ap_highpass
+                    )
+                    main_recordings_lfp[stream_name].append(
+                        recording_lfp_processed
+                    )
+
+    return (
+        main_recordings_ap,
+        surface_recordings_ap,
+        main_recordings_lfp,
+        surface_recordings_lfp,
+    )
+
 
 def save_rms_and_lfp_spectrum(
     recording: si.BaseRecording,
@@ -703,7 +748,11 @@ def save_rms_and_lfp_spectrum(
                 freqs,
             )
 
-def get_concatenated_recordings(main_recordings: list[si.BaseRecording], surface_recordings: list[si.BaseRecording]) -> si.BaseRecording:
+
+def get_concatenated_recordings(
+    main_recordings: list[si.BaseRecording],
+    surface_recordings: list[si.BaseRecording],
+) -> si.BaseRecording:
     """
     Concatenate main and surface recordings after aligning duration and
     removing overlapping channels.
@@ -728,40 +777,40 @@ def get_concatenated_recordings(main_recordings: list[si.BaseRecording], surface
         recordings (with overlapping channels removed and durations aligned).
     """
     min_samples = min(
-        [
-            recording.get_num_samples()
-            for recording in surface_recordings
-        ]
+        [recording.get_num_samples() for recording in surface_recordings]
     )
     recordings_sliced = [
         recording.frame_slice(start_frame=0, end_frame=min_samples)
         for recording in surface_recordings
     ]
     main_recordings_sliced = [
-        main_recording.frame_slice(
-            start_frame=0, end_frame=min_samples
-        )
+        main_recording.frame_slice(start_frame=0, end_frame=min_samples)
         for main_recording in main_recordings
     ]
 
     total_recordings = main_recordings_sliced + recordings_sliced
-    recordings_with_overlapping_channels_removed = remove_overlapping_channels(total_recordings)
-    
+    recordings_with_overlapping_channels_removed = remove_overlapping_channels(
+        total_recordings
+    )
+
     combined_recordings = si.aggregate_channels(
         recording_list=recordings_with_overlapping_channels_removed
     )
     return combined_recordings
 
-def get_main_recording_from_list(recordings: list[si.BaseRecording]) -> si.BaseRecording:
+
+def get_main_recording_from_list(
+    recordings: list[si.BaseRecording],
+) -> si.BaseRecording:
     """
-    Gets the main recording by returning recording 
+    Gets the main recording by returning recording
     with largest number of samples
 
     Parameters
     ----------
     recordings: list[si.BaseRecording]
         The list of recordings
-    
+
     Returns:
     si.BaseRecording
         The recording with the largest number of samples
@@ -769,16 +818,18 @@ def get_main_recording_from_list(recordings: list[si.BaseRecording]) -> si.BaseR
 
     return max(recordings, key=lambda r: r.get_num_samples())
 
+
 def process_raw_data(
     main_recording: si.BaseRecording,
     recording_combined: Union[si.BaseRecording, None],
     stream_name: str,
     results_folder: str,
-    is_lfp: bool
+    is_lfp: bool,
 ) -> None:
     """
     Processes raw data for a given stream by computing RMS and (if applicable)
-    LFP power spectrum for both the main and combined (concatenated) recordings.
+    LFP power spectrum for both the main and
+    combined (concatenated) recordings.
 
     This function saves the resulting metrics to an output folder named
     after the probe associated with the stream.
@@ -808,19 +859,34 @@ def process_raw_data(
         The function saves the computed RMS and LFP spectrum results
         to disk and does not return any value.
     """
-    probe_name = stream_name.split(".")[1].split("-")[0]  # TODO: replace with Galen's probe naming util
+    probe_name = stream_name.split(".")[1].split("-")[
+        0
+    ]  # TODO: replace with Galen's probe naming util
     output_folder = Path(results_folder) / probe_name
-    logging.info(f"Creating output directory at {output_folder}")
+    logging.info(
+        f"Creating output directory at {output_folder}" " if it does not exist"
+    )
     output_folder.mkdir(exist_ok=True)
 
     if recording_combined is not None:
-        logging.info(f"Running RMS on concatenated recording for stream {stream_name}")
-        save_rms_and_lfp_spectrum(recording_combined, output_folder, is_lfp=is_lfp)
+        logging.info(
+            "Running RMS and LFP spectrum (if LFP recording) "
+            f"on concatenated recording for stream {stream_name}"
+        )
+        save_rms_and_lfp_spectrum(
+            recording_combined, output_folder, is_lfp=is_lfp
+        )
 
-    logging.info(f"Running RMS on main recording for stream {stream_name}")
-    save_rms_and_lfp_spectrum(main_recording, output_folder, is_lfp=is_lfp, tag="Main")
+    logging.info(
+        "Running RMS and LFP spectrum (if LFP recording) "
+        f"on main recording for stream {stream_name}"
+    )
+    save_rms_and_lfp_spectrum(
+        main_recording, output_folder, is_lfp=is_lfp, tag="Main"
+    )
 
-def extract_continuous( 
+
+def extract_continuous(
     sorting_folder: Path,
     results_folder: Path,
     min_duration_secs: int = 300,
@@ -895,46 +961,88 @@ def extract_continuous(
             num_blocks,
         ) = get_ecephys_stream_names(probe_surface_finding)
 
-    main_recordings_ap, surface_recordings_ap, main_recordings_lfp, surface_recordings_lfp = get_stream_mappings(
+    (
+        main_recordings_ap,
+        surface_recordings_ap,
+        main_recordings_lfp,
+        surface_recordings_lfp,
+    ) = get_stream_mappings(
         neuropix_streams,
         num_blocks,
         ecephys_compressed_folder,
         min_duration_secs=min_duration_secs,
         freq_min=lfp_freq_min,
         freq_max=lfp_freq_max,
-        decimation_factor=decimation_factor
+        decimation_factor=decimation_factor,
     )
-    if len(neuropix_streams_surface) > 0: # a seperate asset has been provided for surface recording
-       main_recordings_separate_ap, surface_recordings_separate_ap, main_recordings_separate_lfp, surface_separate_recordings_lfp = get_mappings(
+    if (
+        len(neuropix_streams_surface) > 0
+    ):  # a seperate asset has been provided for surface recording
+        (
+            main_recordings_separate_ap,
+            surface_recordings_separate_ap,
+            main_recordings_separate_lfp,
+            surface_separate_recordings_lfp,
+        ) = get_stream_mappings(
             neuropix_streams_surface,
             num_blocks,
             ecephys_compressed_folder_surface,
             min_duration_secs=min_duration_secs,
         )
 
-        # TODO: combine this with mappings above for seperate surface finding asset
+        # TODO: combine this with mappings above for
+        # seperate surface finding asset
 
-
-    logging.info("Looking at AP recordings, will concatenate if surface recordings are present")
+    logging.info(
+        "Looking at AP recordings, "
+        "will concatenate if surface recordings are present"
+    )
     for stream_name_ap in main_recordings_ap:
         recording_concatenated_ap = None
 
         if stream_name_ap in surface_recordings_ap:
             logging.info("Surface AP recordings found, concatenating")
-            recording_concatenated_ap = get_concatenated_recordings(list(main_recordings_ap.values()), list(surface_recordings_ap.values()))
+            recording_concatenated_ap = get_concatenated_recordings(
+                list(main_recordings_ap.values()),
+                list(surface_recordings_ap.values()),
+            )
 
-        main_recording_ap = get_main_recording(list(main_recordings_ap.values()))
-        process_raw_data(main_recording_ap, recording_concatenated_ap, stream_name_ap, results_folder, is_lfp=False)
-    
-    logging.info("Looking at LFP recordings, will concatenate if surface recordings are present")
+        main_recording_ap = get_main_recording_from_list(
+            list(main_recordings_ap.values())
+        )
+        logging.info("Processing raw AP data - Computing rms")
+        process_raw_data(
+            main_recording_ap,
+            recording_concatenated_ap,
+            stream_name_ap,
+            results_folder,
+            is_lfp=False,
+        )
+
+    logging.info(
+        "Looking at LFP recordings "
+        "will concatenate if surface recordings are present"
+    )
     for stream_name_lfp in main_recordings_lfp:
         recording_concatenated_lfp = None
 
         if stream_name_lfp in surface_recordings_lfp:
             logging.info("Surface LFP recordings found, concatenating")
-            recording_concatenated_lfp = get_concatenated_recordings(list(main_recordings_lfp.values()), list(surface_recordings_lfp.values()))
+            recording_concatenated_lfp = get_concatenated_recordings(
+                list(main_recordings_lfp.values()),
+                list(surface_recordings_lfp.values()),
+            )
 
-        main_recording_lfp = get_main_recording(list(main_recordings_lfp.values()))
-        process_raw_data(main_recording_lfp, recording_concatenated_lfp, stream_name_lfp, results_folder, is_lfp=True)
-
-        
+        main_recording_lfp = get_main_recording_from_list(
+            list(main_recordings_lfp.values())
+        )
+        logging.info(
+            "Processing raw LFP data - Computing rms " "and LFP Spectrum"
+        )
+        process_raw_data(
+            main_recording_lfp,
+            recording_concatenated_lfp,
+            stream_name_lfp,
+            results_folder,
+            is_lfp=True,
+        )
