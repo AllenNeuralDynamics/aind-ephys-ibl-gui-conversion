@@ -936,7 +936,6 @@ def extract_continuous(
     results_folder: Path,
     min_duration_secs: int = 300,
     probe_surface_finding: Union[Path, None] = None,
-    lfp_resampling_rate: float = 1000,
     lfp_freq_min: float = 1,
     lfp_freq_max: float = 300,
     num_parallel_jobs: int = 10,
@@ -971,9 +970,6 @@ def extract_continuous(
         This can be used for further processing or
         filtering of the data based on probe configuration.
         If not provided, no surface finding data will be used.
-
-    lfp_resampling_rate: float, default = 1000
-        The rate to resample the LFP recording
 
     lfp_freq_min: float, defaut = 1,
         The min cutoff frequency to low pass filter
