@@ -329,25 +329,6 @@ def remove_overlapping_channels(recordings) -> list[si.BaseRecording]:
     list of si.BaseRecording
         A list of `BaseRecording` objects that
         do not have any overlapping channels.
-
-    Raises
-    ------
-    ValueError
-        If any of the `BaseRecording`
-        objects in the `recordings` list does
-        not contain valid
-        channel information or if the list is empty.
-
-    Notes
-    -----
-    - The function assumes that the `BaseRecording`
-      objects contain a method `get_channel_ids()`
-      that returns a list of channel identifiers for each recording.
-    - The function compares the channel identifiers
-      across all recordings to identify overlaps.
-    - The order of recordings in the returned
-      list is the same as in the input list, excluding those
-      that contain overlapping channels.
     """
 
     removed_recordings = []
@@ -403,14 +384,6 @@ def get_ecephys_stream_names(base_folder: Path) -> tuple[list[str], Path, int]:
         - An integer representing the total number of streams
           found in the base folder.
 
-    Raises
-    ------
-    FileNotFoundError
-        If the `base_folder` does not exist or is not accessible.
-
-    ValueError
-        If no ecephys data streams are found in the `base_folder`.
-
     Notes
     -----
     - The function assumes that the `base_folder` contains
@@ -446,18 +419,77 @@ def get_ecephys_stream_names(base_folder: Path) -> tuple[list[str], Path, int]:
 
 def process_lfp_stream(recording: si.BaseRecording, is_1_0_probe: bool, freq_min: float, freq_max: float, decimation_factor: int) -> si.BaseRecording:
     """
-    Processes the LFP stream
+    Apply LFP preprocessing to a Neuropixels recording.
+
+    For Neuropixels 1.0 probes, the function applies a bandpass filter
+    to the recording between the specified frequency limits.
+    For Neuropixels 2.0 probes, it additionally downsamples the filtered
+    signal by the given decimation factor (typically to ~1.25 kHz).
+
+    Parameters
+    ----------
+    recording : si.BaseRecording
+        The input recording extractor containing the raw LFP signal.
+    is_1_0_probe : bool
+        True if the recording originates from a Neuropixels 1.0 probe;
+        False if from a Neuropixels 2.0 probe.
+    freq_min : float
+        The lower cutoff frequency for the bandpass filter (in Hz).
+    freq_max : float
+        The upper cutoff frequency for the bandpass filter (in Hz).
+    decimation_factor : int
+        The factor by which to downsample the signal (only used for 2.0 probes).
+
+    Returns
+    -------
+    si.BaseRecording
+        The processed LFP recording after filtering (and decimation if applicable).
     """
     if is_1_0_probe: # 1.0 probe, only need to bandpass
+        logging.info(
+            f"1.0 Probe found. Applying bandpass filter with freq min {freq_min} "
+            f"and freq max {freq_max}"
+        )
         return spre.bandpass_filter(recording, freq_min=freq_min, freq_max=freq_max)
     else: # 2.0 probe, decimate to 1250
+        logging.info("Found 2.0 probe")
+        logging.info(
+            f"Applying bandpass filter with freq min {freq_min} "
+            f"and freq max {freq_max}"
+        )
         recording_lfp_bandpass = spre.bandpass_filter(recording, freq_min=freq_min, freq_max=freq_max)
+        logging.info(
+            f"Applying decimation with factor {decimation_factor}"
+        )
         return spre.decimate(recording_lfp_bandpass, decimation_factor=decimation_factor)
 
 def get_neuropixel_lfp_stream(recording: si.BaseRecording, stream_name: str, ecephys_compressed_folder: Path, block_index: int) -> tuple[si.BaseRecording, bool]:
     """
-    Returns the LFP recording and whether or not the recording is 
-    a 1.0 probe or not
+    Retrieve the appropriate LFP recording for a given Neuropixels stream.
+
+    For Neuropixels 1.0 probes, the LFP is stored in a separate stream file
+    (e.g., replacing "AP" with "LFP" in the stream name). For Neuropixels 2.0
+    probes, the LFP is embedded within the same recording stream and does not
+    require a separate read.
+
+    Parameters
+    ----------
+    recording : si.BaseRecording
+        The AP or combined recording extractor corresponding to the stream.
+    stream_name : str
+        The name of the Neuropixels stream (e.g., "probeA-AP" or "probeA-LFP").
+    ecephys_compressed_folder : Path
+        Path to the folder containing the compressed Zarr files for each stream.
+    block_index : int
+        Index of the experiment block to load (used to build the filename).
+
+    Returns
+    -------
+    tuple[si.BaseRecording, bool]
+        A tuple containing:
+        - The LFP recording extractor (`si.BaseRecording`).
+        - A boolean flag indicating whether the probe is Neuropixels 1.0 (`True`)
+          or Neuropixels 2.0 (`False`).
     """
     if "AP" in stream_name: # 1.0 probe - seperate stream
         stream_name_lfp = stream_name.replace("AP", "LFP")
@@ -482,6 +514,49 @@ def get_stream_mappings(
     freq_max: float = 300,
     decimation_factor: int = 24
 ) -> tuple[dict, dict, dict, dict]:
+    """
+    Generate mappings between Neuropixels streams and their corresponding
+    AP and LFP recordings, separating main (long) recordings from
+    surface-finding (short) recordings.
+
+    This function reads Neuropixels recording data from compressed Zarr files,
+    splits them by hardware groups, and applies appropriate preprocessing:
+    - AP data: high-pass filtered.
+    - LFP data: bandpass filtered (and decimated for 2.0 probes).
+
+    Recordings shorter than `min_duration_secs` are assumed to be
+    surface-finding sessions, while longer recordings are considered
+    main sessions.
+
+    Parameters
+    ----------
+    neuropix_streams : list
+        List of stream names (e.g., ["probeA-AP", "probeB-AP", ...]).
+        Streams containing "LFP" are ignored, as LFPs are derived internally.
+    num_blocks : int
+        Number of experiment blocks to process.
+    ecephys_compressed_folder : Path
+        Path to the folder containing the compressed Zarr recordings.
+    min_duration_secs : int, optional
+        Minimum duration (in seconds) separating main from surface recordings.
+        Defaults to 300 seconds.
+    freq_min : float, optional
+        Lower cutoff frequency (Hz) for LFP bandpass filtering. Defaults to 1 Hz.
+    freq_max : float, optional
+        Upper cutoff frequency (Hz) for LFP bandpass filtering. Defaults to 300 Hz.
+    decimation_factor : int, optional
+        Downsampling factor for LFP streams (used only for Neuropixels 2.0 probes).
+        Defaults to 24.
+
+    Returns
+    -------
+    tuple[dict, dict, dict, dict]
+        A tuple of four dictionaries (each a `defaultdict(list)`):
+        - `main_recordings_ap`: High-pass filtered AP recordings for main sessions.
+        - `surface_recordings_ap`: High-pass filtered AP recordings for surface sessions.
+        - `main_recordings_lfp`: Processed LFP recordings for main sessions.
+        - `surface_recordings_lfp`: Processed LFP recordings for surface sessions.
+    """
     main_recordings_ap = defaultdict(list)
     surface_recordings_ap = defaultdict(list)
 
@@ -506,6 +581,7 @@ def get_stream_mappings(
                 recording_group = recording_groups[group]
                 
                 recording_time = (recording_group.get_num_samples() / recording_group.sampling_frequency)
+                logging.info("Applying high pass filter to AP stream")
                 recording_group_ap_highpass = spre.highpass_filter(recording_group)
 
                 recording_lfp, is_1_0_probe = get_neuropixel_lfp_stream(recording_group, stream_name, ecephys_compressed_folder, block_index)
@@ -627,8 +703,124 @@ def save_rms_and_lfp_spectrum(
                 freqs,
             )
 
+def get_concatenated_recordings(main_recordings: list[si.BaseRecording], surface_recordings: list[si.BaseRecording]) -> si.BaseRecording:
+    """
+    Concatenate main and surface recordings after aligning duration and
+    removing overlapping channels.
 
-def extract_continuous(  # noqa: C901
+    This function truncates all recordings to the minimum duration among
+    the surface recordings to ensure equal length, removes overlapping
+    channels across probes, and aggregates the resulting signals into a
+    single combined recording using SpikeInterface utilities.
+
+    Parameters
+    ----------
+    main_recordings : list of si.BaseRecording
+        List of main (long-duration) recordings to include.
+    surface_recordings : list of si.BaseRecording
+        List of surface-finding (short-duration) recordings used to determine
+        the truncation length.
+
+    Returns
+    -------
+    si.BaseRecording
+        A concatenated recording extractor containing all main and surface
+        recordings (with overlapping channels removed and durations aligned).
+    """
+    min_samples = min(
+        [
+            recording.get_num_samples()
+            for recording in surface_recordings
+        ]
+    )
+    recordings_sliced = [
+        recording.frame_slice(start_frame=0, end_frame=min_samples)
+        for recording in surface_recordings
+    ]
+    main_recordings_sliced = [
+        main_recording.frame_slice(
+            start_frame=0, end_frame=min_samples
+        )
+        for main_recording in main_recordings
+    ]
+
+    total_recordings = main_recordings_sliced + recordings_sliced
+    recordings_with_overlapping_channels_removed = remove_overlapping_channels(total_recordings)
+    
+    combined_recordings = si.aggregate_channels(
+        recording_list=recordings_with_overlapping_channels_removed
+    )
+    return combined_recordings
+
+def get_main_recording_from_list(recordings: list[si.BaseRecording]) -> si.BaseRecording:
+    """
+    Gets the main recording by returning recording 
+    with largest number of samples
+
+    Parameters
+    ----------
+    recordings: list[si.BaseRecording]
+        The list of recordings
+    
+    Returns:
+    si.BaseRecording
+        The recording with the largest number of samples
+    """
+
+    return max(recordings, key=lambda r: r.get_num_samples())
+
+def process_raw_data(
+    main_recording: si.BaseRecording,
+    recording_combined: Union[si.BaseRecording, None],
+    stream_name: str,
+    results_folder: str,
+    is_lfp: bool
+) -> None:
+    """
+    Processes raw data for a given stream by computing RMS and (if applicable)
+    LFP power spectrum for both the main and combined (concatenated) recordings.
+
+    This function saves the resulting metrics to an output folder named
+    after the probe associated with the stream.
+
+    Parameters
+    ----------
+    main_recording : si.BaseRecording
+        The main recording object for the stream.
+
+    recording_combined : si.BaseRecording or None
+        The concatenated recording that includes both main and surface
+        recordings. If None, only the main recording is processed.
+
+    stream_name : str
+        The name of the recording stream (e.g., 'imec0.ap').
+
+    results_folder : str
+        Path to the base folder where output files will be saved.
+
+    is_lfp : bool
+        Whether this is an LFP recording. If True, LFP spectrum analysis
+        will also be performed.
+
+    Returns
+    -------
+    None
+        The function saves the computed RMS and LFP spectrum results
+        to disk and does not return any value.
+    """
+    probe_name = stream_name.split(".")[1].split("-")[0]  # TODO: replace with Galen's probe naming util
+    output_folder = Path(results_folder) / probe_name
+    logging.info(f"Creating output directory at {output_folder}")
+    output_folder.mkdir(exist_ok=True)
+
+    if recording_combined is not None:
+        logging.info(f"Running RMS on concatenated recording for stream {stream_name}")
+        save_rms_and_lfp_spectrum(recording_combined, output_folder, is_lfp=is_lfp)
+
+    logging.info(f"Running RMS on main recording for stream {stream_name}")
+    save_rms_and_lfp_spectrum(main_recording, output_folder, is_lfp=is_lfp, tag="Main")
+
+def extract_continuous( 
     sorting_folder: Path,
     results_folder: Path,
     min_duration_secs: int = 300,
@@ -637,19 +829,11 @@ def extract_continuous(  # noqa: C901
     lfp_freq_min: float = 1,
     lfp_freq_max: float = 300,
     num_parallel_jobs: int = 10,
-    use_lfp_cmr: bool = False,
+    decimation_factor: int = 24,
 ):
     """
-    Extract continuous data from sorted recordings
+    Extract features from raw data
     and save the results to the specified folder.
-
-    This function processes the sorted data in the provided `sorting_folder`
-    and extracts continuous
-    signals, such as local field potentials (LFP) or
-    continuous neural recordings, to be saved in
-    the `results_folder`. The extracted data can be
-    filtered by a minimum duration and may use a
-    probe surface finding file for additional processing.
 
     Parameters
     ----------
@@ -691,17 +875,8 @@ def extract_continuous(  # noqa: C901
     num_parallel_jobs: int, default = 10
         Number of parallel jobs to use
 
-    use_lfp_cmr : bool, optional, default=False
-        If `True`, the function will use the local
-        field potential (LFP) continuous metric results
-        (CMR) for additional analysis. If `False`, skips this
-
-    Returns
-    -------
-    None
-        This function does not return any value.
-        The processed continuous data is saved to the
-        `results_folder` specified by the user.
+    decimation_factor: int, default = 24
+        Decimation factor for downsampling
     """
 
     session_folder = Path(str(sorting_folder).split("_sorted")[0])
@@ -710,7 +885,7 @@ def extract_continuous(  # noqa: C901
     neuropix_streams, ecephys_compressed_folder, num_blocks = (
         get_ecephys_stream_names(session_folder)
     )
-    # recording is a seperate asset,
+    # surface recording is a seperate asset,
     # identified by probe_surface_finding
     neuropix_streams_surface = []
     if probe_surface_finding is not None:
@@ -720,260 +895,46 @@ def extract_continuous(  # noqa: C901
             num_blocks,
         ) = get_ecephys_stream_names(probe_surface_finding)
 
-    recording_mappings = {}
-    main_recordings = {}
-
-    main_recordings, recording_mappings = get_mappings(
-        main_recordings,
-        recording_mappings,
+    main_recordings_ap, surface_recordings_ap, main_recordings_lfp, surface_recordings_lfp = get_stream_mappings(
         neuropix_streams,
         num_blocks,
         ecephys_compressed_folder,
         min_duration_secs=min_duration_secs,
+        freq_min=lfp_freq_min,
+        freq_max=lfp_freq_max,
+        decimation_factor=decimation_factor
     )
-    if len(neuropix_streams_surface) > 0:
-        main_recordings, recording_mappings = get_mappings(
-            main_recordings,
-            recording_mappings,
+    if len(neuropix_streams_surface) > 0: # a seperate asset has been provided for surface recording
+       main_recordings_separate_ap, surface_recordings_separate_ap, main_recordings_separate_lfp, surface_separate_recordings_lfp = get_mappings(
             neuropix_streams_surface,
             num_blocks,
             ecephys_compressed_folder_surface,
             min_duration_secs=min_duration_secs,
         )
 
-    for stream_name, main_recordings_streams in main_recordings.items():
-        if "LFP" in stream_name:
-            continue
+        # TODO: combine this with mappings above for seperate surface finding asset
 
-        if stream_name in recording_mappings:
-            min_samples = min(
-                [
-                    recording.get_num_samples()
-                    for recording in recording_mappings[stream_name]
-                ]
-            )
-            recordings_sliced = [
-                recording.frame_slice(start_frame=0, end_frame=min_samples)
-                for recording in recording_mappings[stream_name]
-            ]
-            main_recordings_sliced = [
-                main_recording.frame_slice(
-                    start_frame=0, end_frame=min_samples
-                )
-                for main_recording in main_recordings_streams
-            ]
 
-            total_recordings = main_recordings_sliced + recordings_sliced
-            recordings_removed = remove_overlapping_channels(total_recordings)
-            for recording in recordings_removed:
-                recording.reset_times()
+    logging.info("Looking at AP recordings, will concatenate if surface recordings are present")
+    for stream_name_ap in main_recordings_ap:
+        recording_concatenated_ap = None
 
-            recording_ap = si.aggregate_channels(
-                recording_list=recordings_removed
-            )
-        else:
-            min_samples = min(
-                [
-                    main_recording.get_num_samples()
-                    for main_recording in main_recordings_streams
-                ]
-            )
-            main_recordings_sliced = [
-                main_recording.frame_slice(
-                    start_frame=0, end_frame=min_samples
-                )
-                for main_recording in main_recordings_streams
-            ]
+        if stream_name_ap in surface_recordings_ap:
+            logging.info("Surface AP recordings found, concatenating")
+            recording_concatenated_ap = get_concatenated_recordings(list(main_recordings_ap.values()), list(surface_recordings_ap.values()))
 
-            recordings_removed = remove_overlapping_channels(
-                main_recordings_sliced
-            )
-            for recording in recordings_removed:
-                recording.reset_times()
+        main_recording_ap = get_main_recording(list(main_recordings_ap.values()))
+        process_raw_data(main_recording_ap, recording_concatenated_ap, stream_name_ap, results_folder, is_lfp=False)
+    
+    logging.info("Looking at LFP recordings, will concatenate if surface recordings are present")
+    for stream_name_lfp in main_recordings_lfp:
+        recording_concatenated_lfp = None
 
-            recording_ap = si.aggregate_channels(
-                recording_list=recordings_removed
-            )
+        if stream_name_lfp in surface_recordings_lfp:
+            logging.info("Surface LFP recordings found, concatenating")
+            recording_concatenated_lfp = get_concatenated_recordings(list(main_recordings_lfp.values()), list(surface_recordings_lfp.values()))
 
-        print(stream_name)
+        main_recording_lfp = get_main_recording(list(main_recordings_lfp.values()))
+        process_raw_data(main_recording_lfp, recording_concatenated_lfp, stream_name_lfp, results_folder, is_lfp=True)
 
-        probe_name = stream_name.split(".")[1].split("-")[0]
-
-        output_folder = Path(results_folder) / probe_name
-
-        if not output_folder.exists():
-            output_folder.mkdir()
-
-        if use_lfp_cmr:
-            recording_highpass = spre.highpass_filter(recording_ap)
-            _, channel_labels = spre.detect_bad_channels(recording_highpass)
-            # TODO: might not work, or adjust threshold,
-            # load preprocessed recording
-            out_channel_mask = channel_labels == "out"
-
-        if stream_name.replace("AP", "LFP") in main_recordings:
-            stream_name = stream_name.replace("AP", "LFP")
-            if stream_name in recording_mappings:
-                min_samples = min(
-                    [
-                        recording.get_num_samples()
-                        for recording in recording_mappings[stream_name]
-                    ]
-                )
-                recordings_sliced = [
-                    recording.frame_slice(start_frame=0, end_frame=min_samples)
-                    for recording in recording_mappings[stream_name]
-                ]
-                main_recordings_lfp = [
-                    main_recording.frame_slice(
-                        start_frame=0, end_frame=min_samples
-                    )
-                    for main_recording in main_recordings[stream_name]
-                ]
-                total_recordings = main_recordings_lfp + recordings_sliced
-
-                recordings_removed = remove_overlapping_channels(
-                    total_recordings
-                )
-                for recording in recordings_removed:
-                    recording.reset_times()
-
-                recording_lfp = si.aggregate_channels(
-                    recording_list=recordings_removed
-                )
-            else:
-                min_samples = min(
-                    [
-                        recording.get_num_samples()
-                        for recording in main_recordings[stream_name]
-                    ]
-                )
-                main_recordings_lfp = [
-                    main_recording.frame_slice(
-                        start_frame=0, end_frame=min_samples
-                    )
-                    for main_recording in main_recordings[stream_name]
-                ]
-
-                recordings_removed = remove_overlapping_channels(
-                    main_recordings_lfp
-                )
-                for recording in recordings_removed:
-                    recording.reset_times()
-
-                recording_lfp = si.aggregate_channels(
-                    recording_list=recordings_removed
-                )
-
-            if use_lfp_cmr:
-                out_channel_ids = recording_lfp.channel_ids[out_channel_mask]
-                if len(out_channel_ids) > 0:
-                    recording_lfp = spre.common_reference(
-                        recording_lfp,
-                        reference="global",
-                        ref_channel_ids=out_channel_ids.tolist(),
-                    )
-
-        max_samples_lfp = max(
-            [
-                recording.get_num_samples()
-                for recording in main_recordings[stream_name]
-            ]
-        )
-        main_recording_lfp = [
-            recording
-            for recording in main_recordings[stream_name]
-            if recording.get_num_samples() == max_samples_lfp
-        ][0]
-
-        max_samples_ap = max(
-            [
-                recording.get_num_samples()
-                for recording in main_recordings[
-                    stream_name.replace("LFP", "AP")
-                ]
-            ]
-        )
-        logging.info("High pass filtering concatenated AP recording")
-        recording_ap = spre.highpass_filter(recording_ap)
-
-        logging.info("High pass filtering main AP recording")
-        main_recording_ap = spre.highpass_filter(
-            [
-                recording
-                for recording in main_recordings[
-                    stream_name.replace("LFP", "AP")
-                ]
-                if recording.get_num_samples() == max_samples_ap
-            ][0]
-        )
-        channel_inds = np.arange(recording_ap.get_num_channels())
-
-        logging.info(
-            f"Stream sample rate AP: {recording_ap.sampling_frequency}"
-        )
-
-        logging.info(
-            "Low pass filtering LFP concatenated recording "
-            f"with min freq {lfp_freq_min} and max freq {lfp_freq_max}"
-        )
-        recording_lfp_low_pass = spre.bandpass_filter(
-            recording_lfp, freq_min=lfp_freq_min, freq_max=lfp_freq_max
-        )
-        logging.info(
-            f"Resampling LFP concatenated recording to {lfp_resampling_rate}"
-        )
-        recording_lfp = spre.resample(
-            recording_lfp_low_pass, resample_rate=lfp_resampling_rate
-        )
-
-        logging.info(
-            "Low pass filtering LFP main recording "
-            f"with min freq {lfp_freq_min} and max freq {lfp_freq_max}"
-        )
-        main_recording_lfp_low_pass = spre.bandpass_filter(
-            main_recording_lfp, freq_min=lfp_freq_min, freq_max=lfp_freq_max
-        )
-        logging.info(f"Resampling LFP main recording to {lfp_resampling_rate}")
-        main_recording_lfp = spre.resample(
-            main_recording_lfp_low_pass, resample_rate=lfp_resampling_rate
-        )
-
-        logging.info("Computing rms on concatenated recording")
-        save_rms_and_lfp_spectrum(
-            recording_ap, output_folder, n_jobs=num_parallel_jobs
-        )
-        logging.info("Computing rms on main recording")
-        save_rms_and_lfp_spectrum(
-            main_recording_ap,
-            output_folder,
-            tag="Main",
-            n_jobs=num_parallel_jobs,
-        )
-
-        logging.info(
-            "Computing rms and lfp spectrum for LFP stream"
-            " on concatenated recording"
-        )
-        save_rms_and_lfp_spectrum(
-            recording_lfp, output_folder, is_lfp=True, n_jobs=num_parallel_jobs
-        )
-        logging.info(
-            "Computing rms and lfp spectrum for LFP stream"
-            " on main recording"
-        )
-        save_rms_and_lfp_spectrum(
-            main_recording_lfp,
-            output_folder,
-            is_lfp=True,
-            tag="Main",
-            n_jobs=num_parallel_jobs,
-        )
-
-        # need appended channel locations
-        # so app can show surface recording locations also
-        np.save(
-            output_folder / "channels.localCoordinates.npy",
-            recording_ap.get_channel_locations(),
-        )
-        np.save(output_folder / "channels.rawInd.npy", channel_inds)
+        
