@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import spikeinterface as si
 from spikeinterface.extractors import toy_example
+import spikeinterface.preprocessing as spre
 
 from aind_ephys_ibl_gui_conversion.ephys import (
     _stream_to_probe_name,
@@ -72,8 +73,8 @@ class TestExtractContinuous(unittest.TestCase):
     def setUpClass(cls):
         """Set up small synthetic recordings for reuse."""
         rec, _ = toy_example(num_channels=4, duration=2, seed=0)
-        rec_lfp = si.decimate(
-            si.bandpass_filter(rec, 0.1, 300), decimation_factor=10
+        rec_lfp = spre.decimate(
+            spre.bandpass_filter(rec, 0.1, 300), decimation_factor=10
         )
         cls.rec_ap = rec
         cls.rec_lfp = rec_lfp
