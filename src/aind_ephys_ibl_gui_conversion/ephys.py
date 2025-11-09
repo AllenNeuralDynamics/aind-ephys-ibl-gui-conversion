@@ -1045,12 +1045,12 @@ def extract_continuous(
         if stream_name_ap in surface_recordings_ap:
             logging.info("Surface AP recordings found, concatenating")
             recording_concatenated_ap = get_concatenated_recordings(
-                list(main_recordings_ap.values()),
-                list(surface_recordings_ap.values()),
+                main_recordings_ap[stream_name_ap],
+                surface_recordings_ap[stream_name_ap],
             )
 
         main_recording_ap = get_main_recording_from_list(
-            list(main_recordings_ap.values())
+            main_recordings_ap[stream_name_ap]
         )
         logging.info("Processing raw AP data - Computing rms")
         process_raw_data(
@@ -1071,12 +1071,12 @@ def extract_continuous(
         if stream_name_lfp in surface_recordings_lfp:
             logging.info("Surface LFP recordings found, concatenating")
             recording_concatenated_lfp = get_concatenated_recordings(
-                list(main_recordings_lfp.values()),
-                list(surface_recordings_lfp.values()),
+                main_recordings_lfp[stream_name_lfp],
+                surface_recordings_lfp[stream_name_lfp],
             )
 
         main_recording_lfp = get_main_recording_from_list(
-            list(main_recordings_lfp.values())
+            main_recordings_lfp[stream_name_lfp]
         )
         logging.info(
             "Processing raw LFP data - Computing rms and LFP Spectrum"
