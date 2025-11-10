@@ -805,7 +805,7 @@ def get_largest_segment_recordings(
     Parameters
     ----------
     recordings : List[si.BaseRecording]
-        List of recording objects, each with potentially 
+        List of recording objects, each with potentially
         multiple segments.
 
     Returns
