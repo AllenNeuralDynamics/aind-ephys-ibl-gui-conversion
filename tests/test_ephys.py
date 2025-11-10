@@ -7,12 +7,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 import spikeinterface as si
-from spikeinterface.extractors import toy_example
 import spikeinterface.preprocessing as spre
+from spikeinterface.extractors import toy_example
 
 from aind_ephys_ibl_gui_conversion.ephys import (
     _stream_to_probe_name,
     get_concatenated_recordings,
+    get_largest_segment_recordings,
     get_main_recording_from_list,
     get_neuropixel_lfp_stream,
     process_lfp_stream,
@@ -72,7 +73,9 @@ class TestExtractContinuous(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Set up small synthetic recordings for reuse."""
-        rec, _ = toy_example(num_channels=4, duration=2, seed=0)
+        rec, _ = toy_example(
+            duration=[5, 10], num_channels=4, duration=2, seed=0
+        )
         rec_lfp = spre.decimate(
             spre.bandpass_filter(rec, 0.1, 300), decimation_factor=10
         )
@@ -191,6 +194,42 @@ class TestExtractContinuous(unittest.TestCase):
         mock_save.assert_called()
         files = list(self.tmpdir.glob("**/*"))
         self.assertTrue(any(f.is_dir() for f in files))
+
+    # --------------------------
+    # get_largest_segment_recordings
+    # --------------------------
+
+    def test_get_largest_segment_recordings(self):
+        """Tests extracting only the largest segment from each recording."""
+        # Create recordings with multiple segments by slicing
+        largest_segments = get_largest_segment_recordings(
+            [self.rec_ap, self.rec_lfp]
+        )
+
+        # Check that the result is a list of recordings
+        self.assertIsInstance(largest_segments, list)
+        self.assertTrue(
+            all(isinstance(r, si.BaseRecording) for r in largest_segments)
+        )
+
+        # Check that each recording now has only 1 segment
+        self.assertEqual(largest_segments[0].get_num_segments(), 1)
+        self.assertEqual(largest_segments[1].get_num_segments(), 1)
+
+        # Check that the largest segment corresponds to the longer one
+        self.assertEqual(
+            largest_segments[0].get_num_samples(),
+            max(
+                self.rec_ap.get_num_samples(0), self.rec_ap.get_num_samples(1)
+            ),
+        )
+        self.assertEqual(
+            largest_segments[1].get_num_samples(),
+            max(
+                self.rec_lfp.get_num_samples(0),
+                self.rec_lfp.get_num_samples(1),
+            ),
+        )
 
 
 if __name__ == "__main__":
