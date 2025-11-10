@@ -16,6 +16,7 @@ from aind_ephys_ibl_gui_conversion.ephys import (
     get_largest_segment_recordings,
     get_main_recording_from_list,
     get_neuropixel_lfp_stream,
+    remove_overlapping_channels,
     process_lfp_stream,
     process_raw_data,
 )
@@ -160,6 +161,66 @@ class TestExtractContinuous(unittest.TestCase):
         combined = get_concatenated_recordings([self.rec_ap], [rec_short])
         self.assertIsInstance(combined, si.BaseRecording)
         mock_remove.assert_called_once()
+
+from unittest.mock import MagicMock, patch
+
+class TestExtractContinuous(unittest.TestCase):
+    """Tests extract_continuous orchestrator"""
+
+    @classmethod
+    def setUpClass(cls):
+        """Set up small synthetic recordings for reuse."""
+        rec, _ = toy_example(num_segments=1, num_channels=4, seed=0)
+        rec_lfp = spre.decimate(
+            spre.bandpass_filter(rec, 0.1, 300), decimation_factor=10
+        )
+        cls.rec_ap = rec
+        cls.rec_lfp = rec_lfp
+        cls.tmpdir = Path(tempfile.mkdtemp(prefix="test_extract_continuous_"))
+
+    @classmethod
+    def tearDownClass(cls):
+        """TearDown"""
+        shutil.rmtree(cls.tmpdir)
+
+    # --------------------------
+    # remove_overlapping_channels
+    # --------------------------
+
+    def test_remove_overlapping_channels(self):
+        """Tests that overlapping channels are removed correctly."""
+
+        # Create mock recordings
+        rec1 = MagicMock()
+        rec1.channel_ids = [0, 1, 2]
+        rec1.get_channel_locations.return_value = [(0,0), (1,0), (2,0)]
+        rec1.remove_channels.side_effect = lambda ids: f"rec1_removed_{ids}"
+
+        rec2 = MagicMock()
+        rec2.channel_ids = [3, 4, 5]
+        rec2.get_channel_locations.return_value = [(2,0), (3,0), (4,0)]  # overlap at (2,0)
+        rec2.remove_channels.side_effect = lambda ids: f"rec2_removed_{ids}"
+
+        rec3 = MagicMock()
+        rec3.channel_ids = [6, 7]
+        rec3.get_channel_locations.return_value = [(5,0), (6,0)]
+        rec3.remove_channels.side_effect = lambda ids: f"rec3_removed_{ids}"
+
+        recordings = [rec1, rec2, rec3]
+        result = remove_overlapping_channels(recordings)
+
+        self.assertEqual(result[0], "rec1_removed_[]")
+        self.assertEqual(result[1], "rec2_removed_[3]")
+        self.assertEqual(result[2], "rec3_removed_[]")
+
+        rec1.get_channel_locations.assert_called()
+        rec2.get_channel_locations.assert_called()
+        rec3.get_channel_locations.assert_called()
+
+        rec1.remove_channels.assert_called_with([])
+        rec2.remove_channels.assert_called_with([3])
+        rec3.remove_channels.assert_called_with([])
+
 
     # --------------------------
     # get_main_recording_from_list

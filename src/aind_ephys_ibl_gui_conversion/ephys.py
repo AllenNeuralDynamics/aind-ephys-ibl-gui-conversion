@@ -365,7 +365,7 @@ def remove_overlapping_channels(recordings) -> list[si.BaseRecording]:
 
     removed_recordings = []
     channel_locations_seen = set()
-    for index, recording in enumerate(recordings):
+    for ii, recording in enumerate(recordings):
         remove_indices = []
         channel_locations = [
             tuple(location) for location in recording.get_channel_locations()
@@ -378,8 +378,10 @@ def remove_overlapping_channels(recordings) -> list[si.BaseRecording]:
                 remove_indices.append(index)
 
         channel_ids_to_remove = []
-        for index in remove_indices:
-            channel_ids_to_remove.append(recording.channel_ids[index])
+        for index_to_remove in remove_indices:
+            channel_ids_to_remove.append(
+                recording.channel_ids[index_to_remove]
+            )
 
         removed_recordings.append(
             recording.remove_channels(channel_ids_to_remove)
