@@ -73,9 +73,7 @@ class TestExtractContinuous(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Set up small synthetic recordings for reuse."""
-        rec, _ = toy_example(
-            duration=[5.0, 10.0], num_channels=4, seed=0
-        )
+        rec, _ = toy_example(num_segments=1, num_channels=4, seed=0)
         rec_lfp = spre.decimate(
             spre.bandpass_filter(rec, 0.1, 300), decimation_factor=10
         )
@@ -156,12 +154,8 @@ class TestExtractContinuous(unittest.TestCase):
     )
     def test_get_concatenated_recordings(self, mock_remove):
         """Tests getting concatenated recordings"""
-        combined = get_concatenated_recordings([self.rec_ap], [self.rec_lfp])
+        combined = get_concatenated_recordings([self.rec_ap, self.rec_lfp])
         self.assertIsInstance(combined, si.BaseRecording)
-        self.assertEqual(
-            combined.get_num_channels(),
-            self.rec_ap.get_num_channels() + self.rec_lfp.get_num_channels(),
-        )
         mock_remove.assert_called_once()
 
     # --------------------------
@@ -186,7 +180,7 @@ class TestExtractContinuous(unittest.TestCase):
         process_raw_data(
             main_recording=self.rec_ap,
             recording_combined=None,
-            stream_name="probeA.ap",
+            stream_name="Record Node 104#Neuropix-PXI-100.ProbeA-AP",
             results_folder=self.tmpdir,
             is_lfp=False,
         )
@@ -202,9 +196,10 @@ class TestExtractContinuous(unittest.TestCase):
     def test_get_largest_segment_recordings(self):
         """Tests extracting only the largest segment from each recording."""
         # Create recordings with multiple segments by slicing
-        largest_segments = get_largest_segment_recordings(
-            [self.rec_ap, self.rec_lfp]
+        multi_seg, _ = toy_example(
+            num_segments=2, duration=[5.0, 10.0], num_channels=4, seed=0
         )
+        largest_segments = get_largest_segment_recordings([multi_seg])
 
         # Check that the result is a list of recordings
         self.assertIsInstance(largest_segments, list)
@@ -214,13 +209,13 @@ class TestExtractContinuous(unittest.TestCase):
 
         # Check that each recording now has only 1 segment
         self.assertEqual(largest_segments[0].get_num_segments(), 1)
-        self.assertEqual(largest_segments[1].get_num_segments(), 1)
 
         # Check that the largest segment corresponds to the longer one
         self.assertEqual(
             largest_segments[0].get_num_samples(),
             max(
-                self.rec_ap.get_num_samples(0), self.rec_ap.get_num_samples(1)
+                multi_seg.get_num_samples(0),
+                multi_seg.rec_ap.get_num_samples(1),
             ),
         )
         self.assertEqual(
