@@ -6,7 +6,7 @@ import logging
 import re
 from collections import defaultdict
 from pathlib import Path
-from typing import Union
+from typing import List, Union
 
 import numpy as np
 import pandas as pd
@@ -17,7 +17,6 @@ from scipy.signal import welch
 from spikeinterface.core import get_random_data_chunks
 from spikeinterface.exporters import export_to_phy
 from spikeinterface.exporters.to_ibl import compute_rms
-
 
 STREAM_PROBE_REGEX = re.compile(r"^Record Node \d+#[^.]+\.(.+?)(-AP|-LFP)?$")
 
@@ -796,6 +795,40 @@ def save_rms_and_lfp_spectrum(
             )
 
 
+def get_largest_segment_recordings(
+    recordings: List[si.BaseRecording],
+) -> List[si.BaseRecording]:
+    """
+    Return recordings containing only the segment
+    with the largest number of samples.
+
+    Parameters
+    ----------
+    recordings : List[si.BaseRecording]
+        List of recording objects, each with potentially 
+        multiple segments.
+
+    Returns
+    -------
+    recordings_largest_segment : List[si.BaseRecording]
+        Each recording reduced to its largest segment only.
+    """
+    recordings_largest_segment = []
+
+    for rec in recordings:
+        # Find the segment with the maximum number of samples
+        segment_lengths = [
+            rec.get_num_samples(seg) for seg in range(rec.get_num_segments())
+        ]
+        max_index = segment_lengths.index(max(segment_lengths))
+
+        # Select that segment
+        largest_seg_rec = rec.select_segments(max_index)
+        recordings_largest_segment.append(largest_seg_rec)
+
+    return recordings_largest_segment
+
+
 def get_concatenated_recordings(
     main_recordings: list[si.BaseRecording],
     surface_recordings: list[si.BaseRecording],
@@ -803,6 +836,8 @@ def get_concatenated_recordings(
     """
     Concatenate main and surface recordings after aligning duration and
     removing overlapping channels.
+
+    Gets the largest segment if multiple segments are present
 
     This function truncates all recordings to the minimum duration among
     the surface recordings to ensure equal length, removes overlapping
@@ -823,6 +858,7 @@ def get_concatenated_recordings(
         A concatenated recording extractor containing all main and surface
         recordings (with overlapping channels removed and durations aligned).
     """
+
     min_samples = min(
         [recording.get_num_samples() for recording in surface_recordings]
     )
@@ -1040,17 +1076,25 @@ def extract_continuous(
         "will concatenate if surface recordings are present"
     )
     for stream_name_ap in main_recordings_ap:
+        main_recordings_ap_largest_segment = get_largest_segment_recordings(
+            main_recordings_ap[stream_name_ap]
+        )
         recording_concatenated_ap = None
 
         if stream_name_ap in surface_recordings_ap:
             logging.info("Surface AP recordings found, concatenating")
+            surface_recordings_ap_largest_segment = (
+                get_largest_segment_recordings(
+                    surface_recordings_ap[stream_name_ap]
+                )
+            )
             recording_concatenated_ap = get_concatenated_recordings(
-                main_recordings_ap[stream_name_ap],
-                surface_recordings_ap[stream_name_ap],
+                main_recordings_ap_largest_segment,
+                surface_recordings_ap_largest_segment,
             )
 
         main_recording_ap = get_main_recording_from_list(
-            main_recordings_ap[stream_name_ap]
+            main_recordings_ap_largest_segment
         )
         logging.info("Processing raw AP data - Computing rms")
         process_raw_data(
@@ -1067,16 +1111,24 @@ def extract_continuous(
     )
     for stream_name_lfp in main_recordings_lfp:
         recording_concatenated_lfp = None
+        main_recordings_lfp_largest_segment = get_largest_segment_recordings(
+            main_recordings_lfp[stream_name_lfp]
+        )
 
         if stream_name_lfp in surface_recordings_lfp:
             logging.info("Surface LFP recordings found, concatenating")
+            surface_recordings_lfp_largest_segment = (
+                get_largest_segment_recordings(
+                    surface_recordings_lfp[stream_name_lfp]
+                )
+            )
             recording_concatenated_lfp = get_concatenated_recordings(
-                main_recordings_lfp[stream_name_lfp],
-                surface_recordings_lfp[stream_name_lfp],
+                main_recordings_lfp_largest_segment,
+                surface_recordings_lfp_largest_segment,
             )
 
         main_recording_lfp = get_main_recording_from_list(
-            main_recordings_lfp[stream_name_lfp]
+            main_recordings_lfp_largest_segment
         )
         logging.info(
             "Processing raw LFP data - Computing rms and LFP Spectrum"
