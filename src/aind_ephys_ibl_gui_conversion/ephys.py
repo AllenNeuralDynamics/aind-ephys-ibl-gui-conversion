@@ -837,8 +837,6 @@ def get_concatenated_recordings(
     Concatenate main and surface recordings after aligning duration and
     removing overlapping channels.
 
-    Gets the largest segment if multiple segments are present
-
     This function truncates all recordings to the minimum duration among
     the surface recordings to ensure equal length, removes overlapping
     channels across probes, and aggregates the resulting signals into a
@@ -1076,6 +1074,7 @@ def extract_continuous(
         "will concatenate if surface recordings are present"
     )
     for stream_name_ap in main_recordings_ap:
+        # if multiple segments for a recording, get largest per recording
         main_recordings_ap_largest_segment = get_largest_segment_recordings(
             main_recordings_ap[stream_name_ap]
         )
@@ -1083,6 +1082,7 @@ def extract_continuous(
 
         if stream_name_ap in surface_recordings_ap:
             logging.info("Surface AP recordings found, concatenating")
+            # if multiple segments for a recording, get largest per recording
             surface_recordings_ap_largest_segment = (
                 get_largest_segment_recordings(
                     surface_recordings_ap[stream_name_ap]
@@ -1110,13 +1110,15 @@ def extract_continuous(
         "will concatenate if surface recordings are present"
     )
     for stream_name_lfp in main_recordings_lfp:
-        recording_concatenated_lfp = None
+        # if multiple segments for a recording, get largest per recording
         main_recordings_lfp_largest_segment = get_largest_segment_recordings(
             main_recordings_lfp[stream_name_lfp]
         )
+        recording_concatenated_lfp = None
 
         if stream_name_lfp in surface_recordings_lfp:
             logging.info("Surface LFP recordings found, concatenating")
+            # if multiple segments for a recording, get largest per recording
             surface_recordings_lfp_largest_segment = (
                 get_largest_segment_recordings(
                     surface_recordings_lfp[stream_name_lfp]
