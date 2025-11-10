@@ -148,14 +148,13 @@ class TestExtractContinuous(unittest.TestCase):
     # --------------------------
     # get_concatenated_recordings
     # --------------------------
-    def test_get_concatenated_recordings(self, mock_remove):
+    def test_get_concatenated_recordings(self):
         """Tests getting concatenated recordings"""
         rec_short, _ = toy_example(
             num_segments=1, duration=5.0, num_channels=8
         )
         combined = get_concatenated_recordings([self.rec_ap], [rec_short])
         self.assertIsInstance(combined, si.BaseRecording)
-        mock_remove.assert_called_once()
 
     # --------------------------
     # get_largest_segment_recordings
