@@ -148,11 +148,6 @@ class TestExtractContinuous(unittest.TestCase):
     # --------------------------
     # get_concatenated_recordings
     # --------------------------
-
-    @patch(
-        "aind_ephys_ibl_gui_conversion.ephys.remove_overlapping_channels",
-        side_effect=lambda x: x,
-    )
     def test_get_concatenated_recordings(self, mock_remove):
         """Tests getting concatenated recordings"""
         rec_short, _ = toy_example(
