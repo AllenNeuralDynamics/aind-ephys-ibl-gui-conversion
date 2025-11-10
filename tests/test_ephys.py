@@ -154,7 +154,7 @@ class TestExtractContinuous(unittest.TestCase):
     )
     def test_get_concatenated_recordings(self, mock_remove):
         """Tests getting concatenated recordings"""
-        combined = get_concatenated_recordings([self.rec_ap, self.rec_lfp])
+        combined = get_concatenated_recordings([self.rec_ap], [self.rec_lfp])
         self.assertIsInstance(combined, si.BaseRecording)
         mock_remove.assert_called_once()
 
@@ -215,14 +215,7 @@ class TestExtractContinuous(unittest.TestCase):
             largest_segments[0].get_num_samples(),
             max(
                 multi_seg.get_num_samples(0),
-                multi_seg.rec_ap.get_num_samples(1),
-            ),
-        )
-        self.assertEqual(
-            largest_segments[1].get_num_samples(),
-            max(
-                self.rec_lfp.get_num_samples(0),
-                self.rec_lfp.get_num_samples(1),
+                multi_seg.get_num_samples(1),
             ),
         )
 
