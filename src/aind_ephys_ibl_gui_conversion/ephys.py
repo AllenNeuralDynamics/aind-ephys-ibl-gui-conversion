@@ -1352,7 +1352,7 @@ def extract_continuous(
     all_data_processes = data_processes_ap + data_processes_lfp
     pipeline_process = PipelineProcess(
         data_processes=all_data_processes,
-        processsor_full_name="Ephys IBL Conversion",
+        processor_full_name="Ephys IBL Conversion",
     )
     processing = Processing(procesing_pipeline=pipeline_process)
     processing.write_standard_file(output_direcctory=Path(results_folder))
