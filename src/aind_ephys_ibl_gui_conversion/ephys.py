@@ -2,8 +2,10 @@
 Functions to process ephys data
 """
 
+import json
 import logging
 import re
+import shutil
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +16,15 @@ import pandas as pd
 import spikeinterface as si
 import spikeinterface.extractors as se
 import spikeinterface.preprocessing as spre
+from aind_data_schema.core.data_description import DerivedDataDescription
+from aind_data_schema.core.processing import (
+    DataProcess,
+    PipelineProcess,
+    Processing,
+)
+from aind_metadata_upgrader.data_description_upgrade import (
+    DataDescriptionUpgrade,
+)
 from scipy.signal import welch
 from spikeinterface.core import get_random_data_chunks
 from spikeinterface.exporters import export_to_phy
@@ -678,7 +689,7 @@ def get_stream_mappings(
                 / f"experiment{block_index + 1}_{stream_name}.zarr"
             )
             # cancels any pointers to time vectors
-            recording.reset_times() 
+            recording.reset_times()
             recording_groups = recording.split_by("group")
 
             for group in recording_groups:
@@ -687,7 +698,6 @@ def get_stream_mappings(
                     f"{block_index} and group {group}"
                 )
                 recording_group = recording_groups[group]
-
 
                 logging.info("Applying high pass filter to AP stream")
                 recording_group_ap_highpass = spre.highpass_filter(
@@ -738,7 +748,7 @@ def save_rms_and_lfp_spectrum(
     n_jobs: int = 10,
     is_lfp: bool = False,
     tag: Union[str, None] = None,
-):
+) -> List[DataProcess]:
     """
     Saves rms and lfp spectrum for the given recording
 
@@ -760,7 +770,13 @@ def save_rms_and_lfp_spectrum(
         An optional tag used to distinguish different outputs.
         If provided, this string will be included
         in the filenames for the saved metrics.
+
+    Returns
+    -------
+    List[DataProcess]
+        List of data process objects for metadata capture
     """
+    data_processes = []
     logging.info("Computing rms")
     start_time_rms = datetime.now()
     rms, rms_times = compute_rms(recording, n_jobs=n_jobs)
@@ -770,6 +786,27 @@ def save_rms_and_lfp_spectrum(
         "Elapsed time for rms:"
         f"{elapsed_time_rms.total_seconds():.6f} seconds"
     )
+    data_process_rms = DataProcess(
+        name="Other",
+        software_version=si.__version__,
+        start_date_time=start_time_rms,
+        end_date_time=end_time_rms,
+        input_location="/data",
+        output_location=output_folder,
+        parameters={
+            "n_jobs_parallel": n_jobs,
+        },
+        code_url=str(
+            "https://github.com/SpikeInterface/spikeinterface/blob/"
+            "d6f8c5af9d33aca3d9191472205b91adc3ca1faf/src/"
+            "spikeinterface/exporters/to_ibl.py#L243"
+        ),
+        notes=str(
+            f"RMS for ephys {output_folder.stem}. Either AP or LFP stream."
+            f"Is LFP: {is_lfp}",
+        ),
+    )
+    data_processes.append(data_process_rms)
 
     if not is_lfp:
         if tag is None:
@@ -836,6 +873,29 @@ def save_rms_and_lfp_spectrum(
             "Elapsed time for rms: "
             f"{elapsed_time_lfp_spectrum.total_seconds():.6f} seconds"
         )
+
+        data_process_lfp_spectrum = DataProcess(
+            name="Other",
+            software_version=si.__version__,
+            start_date_time=start_time_rms,
+            end_date_time=end_time_rms,
+            input_location="/data",
+            output_location=output_folder,
+            parameters={
+                "n_jobs_parallel": n_jobs,
+            },
+            code_url=str(
+                "https://github.com/SpikeInterface/spikeinterface/blob/"
+                "d6f8c5af9d33aca3d9191472205b91adc3ca1faf/src/"
+                "spikeinterface/exporters/to_ibl.py#L243"
+            ),
+            notes=str(
+                f"LFP spectral density for ephys {output_folder.stem} "
+                "either AP or LFP stream."
+            ),
+        )
+        data_processes.append(data_process_lfp_spectrum)
+
         if tag is None:
             np.save(
                 output_folder / "_iblqc_ephysSpectralDensityLF.power.npy", psd
@@ -855,6 +915,7 @@ def save_rms_and_lfp_spectrum(
                 / f"_iblqc_ephysSpectralDensityLF{tag}.freqs.npy",
                 freqs,
             )
+    return data_processes
 
 
 def get_largest_segment_recordings(
@@ -975,7 +1036,7 @@ def process_raw_data(
     stream_name: str,
     results_folder: str,
     is_lfp: bool,
-) -> None:
+) -> List[DataProcess]:
     """
     Processes raw data for a given stream by computing RMS and (if applicable)
     LFP power spectrum for both the main and
@@ -1005,9 +1066,8 @@ def process_raw_data(
 
     Returns
     -------
-    None
-        The function saves the computed RMS and LFP spectrum results
-        to disk and does not return any value.
+    List[DataProcess]
+        List of data process objects for metadata capture
     """
     probe_name = _stream_to_probe_name(stream_name)
     output_folder = Path(results_folder) / probe_name
@@ -1017,12 +1077,13 @@ def process_raw_data(
     output_folder.mkdir(exist_ok=True)
 
     logging.info(f"LFP Stream: {is_lfp}")
+    data_processes_combined = []
     if recording_combined is not None:
         logging.info(
             "Running RMS and LFP spectrum (if LFP stream) "
             f"on concatenated recording for stream {stream_name}"
         )
-        save_rms_and_lfp_spectrum(
+        data_processes_combined = save_rms_and_lfp_spectrum(
             recording_combined, output_folder, is_lfp=is_lfp
         )
 
@@ -1030,8 +1091,67 @@ def process_raw_data(
         "Running RMS and LFP spectrum (if LFP stream) "
         f"on main recording for stream {stream_name}"
     )
-    save_rms_and_lfp_spectrum(
+    data_processes_main = save_rms_and_lfp_spectrum(
         main_recording, output_folder, is_lfp=is_lfp, tag="Main"
+    )
+    return data_processes_main + data_processes_combined
+
+
+def copy_ancillary_files(session_folder: Path, results_folder: Path) -> None:
+    """
+    Copy ancillary files from input_dir to output_dir
+
+    Parameters
+    ----------
+    session_folder: Path
+        Path to folder with metadata files
+    results_folder: Path
+        Path to where to write output data description file
+    """
+    ancillary_files = [
+        "procedures.json",
+        "subject.json",
+        "session.json",
+        "rig.json",
+    ]
+    for file in ancillary_files:
+        try:
+            shutil.copy(
+                f"{session_folder.as_posix()}/{file}",
+                f"{results_folder.as_posix()}/{file}",
+            )
+        except FileNotFoundError:
+            raise FileNotFoundError(
+                f"Could not find {file} in {session_folder}. "
+                "Ensure the file exists in the input directory."
+            )
+
+
+def create_derived_data_description(
+    session_folder: Path, results_folder: Path
+) -> None:
+    """
+    Create a derived data description
+
+    Parameters
+    ----------
+    session_folder: Path
+        Path to folder with metadata files
+    results_folder: Path
+        Path to where to write output data description file
+    """
+    data_description_fp = session_folder / "data_description.json"
+    with open(data_description_fp) as j:
+        data_description = json.load(j)
+    data_description_upgrader = DataDescriptionUpgrade(
+        old_data_description_dict=data_description
+    )
+    data_upgrader = data_description_upgrader.upgrade()
+    derived_data_description = DerivedDataDescription.from_data_description(
+        data_description=data_upgrader, process_name="IBL-converted"
+    )
+    derived_data_description.write_standard_file(
+        output_directory=results_folder
     )
 
 
@@ -1154,6 +1274,8 @@ def extract_continuous(
         "Looking at AP recordings, "
         "will concatenate if surface recordings are present"
     )
+    data_processes_ap = []
+    data_processes_lfp = []
     for stream_name_ap in main_recordings_ap:
         # if multiple segments for a recording, get largest per recording
         main_recordings_ap_largest_segment = get_largest_segment_recordings(
@@ -1178,12 +1300,14 @@ def extract_continuous(
             main_recordings_ap_largest_segment
         )
         logging.info("Processing raw AP data - Computing rms")
-        process_raw_data(
-            main_recording_ap,
-            recording_concatenated_ap,
-            stream_name_ap,
-            results_folder,
-            is_lfp=False,
+        data_processes_ap.extend(
+            process_raw_data(
+                main_recording_ap,
+                recording_concatenated_ap,
+                stream_name_ap,
+                results_folder,
+                is_lfp=False,
+            )
         )
 
     logging.info(
@@ -1216,10 +1340,22 @@ def extract_continuous(
         logging.info(
             "Processing raw LFP data - Computing rms and LFP Spectrum"
         )
-        process_raw_data(
-            main_recording_lfp,
-            recording_concatenated_lfp,
-            stream_name_lfp,
-            results_folder,
-            is_lfp=True,
+        data_processes_lfp.extend(
+            process_raw_data(
+                main_recording_lfp,
+                recording_concatenated_lfp,
+                stream_name_lfp,
+                results_folder,
+                is_lfp=True,
+            )
         )
+
+    all_data_processes = data_processes_ap + data_processes_lfp
+    pipeline_process = PipelineProcess(
+        data_processes=all_data_processes,
+        processsor_full_name="Ephys IBL Conversion",
+    )
+    processing = Processing(procesing_pipeline=pipeline_process)
+    processing.write_standard_file(output_direcctory=Path(results_folder))
+    create_derived_data_description(session_folder, Path(results_folder))
+    copy_ancillary_files(session_folder, Path(results_folder))
