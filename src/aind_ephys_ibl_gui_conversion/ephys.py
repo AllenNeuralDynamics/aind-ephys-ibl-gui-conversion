@@ -870,7 +870,7 @@ def save_rms_and_lfp_spectrum(
             end_time_lfp_spectrum - start_time_lfp_spectrum
         )
         logging.info(
-            "Elapsed time for rms: "
+            "Elapsed time for LFP spectrum: "
             f"{elapsed_time_lfp_spectrum.total_seconds():.6f} seconds"
         )
 
@@ -1354,7 +1354,7 @@ def extract_continuous(
         data_processes=all_data_processes,
         processor_full_name="Ephys IBL Conversion",
     )
-    processing = Processing(procesing_pipeline=pipeline_process)
+    processing = Processing(processing_pipeline=pipeline_process)
     processing.write_standard_file(output_direcctory=Path(results_folder))
     create_derived_data_description(session_folder, Path(results_folder))
     copy_ancillary_files(session_folder, Path(results_folder))
