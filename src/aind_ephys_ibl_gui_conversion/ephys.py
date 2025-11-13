@@ -792,7 +792,7 @@ def save_rms_and_lfp_spectrum(
         start_date_time=start_time_rms,
         end_date_time=end_time_rms,
         input_location="/data",
-        output_location=output_folder,
+        output_location=output_folder.as_posix(),
         parameters={
             "n_jobs_parallel": n_jobs,
         },
@@ -880,7 +880,7 @@ def save_rms_and_lfp_spectrum(
             start_date_time=start_time_rms,
             end_date_time=end_time_rms,
             input_location="/data",
-            output_location=output_folder,
+            output_location=output_folder.as_posix(),
             parameters={
                 "n_jobs_parallel": n_jobs,
             },
