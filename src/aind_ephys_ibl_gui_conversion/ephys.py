@@ -5,6 +5,7 @@ Functions to process ephys data
 import logging
 import re
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import List, Union
 
@@ -19,6 +20,46 @@ from spikeinterface.exporters import export_to_phy
 from spikeinterface.exporters.to_ibl import compute_rms
 
 STREAM_PROBE_REGEX = re.compile(r"^Record Node \d+#[^.]+\.(.+?)(-AP|-LFP)?$")
+
+
+def _merge_dicts(d1: defaultdict, d2: defaultdict) -> defaultdict:
+    """
+    Merge two ``defaultdict(list)`` objects into a new ``defaultdict(list)``.
+
+    This function returns a new ``defaultdict(list)`` containing all key–value
+    pairs from both input dictionaries. If a key appears in both, their lists
+    are concatenated in order (values from ``d1`` first, then ``d2``). The
+    inputs are not modified.
+
+    Used for keeping track of mappings when surface recroding is a seperate
+    data asset.
+
+    Parameters
+    ----------
+    d1 : defaultdict
+        The first ``defaultdict(list)`` to merge.
+    d2 : defaultdict
+        The second ``defaultdict(list)`` to merge.
+
+    Returns
+    -------
+    defaultdict
+        A new ``defaultdict(list)`` containing the merged key–value pairs.
+
+    Examples
+    --------
+    >>> from collections import defaultdict
+    >>> a = defaultdict(list, {'x': [1, 2], 'y': [3]})
+    >>> b = defaultdict(list, {'y': [4], 'z': [5]})
+    >>> merge_defaultdicts(a, b)
+    defaultdict(<class 'list'>, {'x': [1, 2], 'y': [3, 4], 'z': [5]})
+    """
+    merged = defaultdict(list)
+    for k, v in d1.items():
+        merged[k].extend(v)
+    for k, v in d2.items():
+        merged[k].extend(v)
+    return merged
 
 
 def _stream_to_probe_name(stream_name: str) -> str | None:
@@ -551,6 +592,8 @@ def get_neuropixel_lfp_stream(
             ecephys_compressed_folder
             / f"experiment{block_index + 1}_{stream_name_lfp}.zarr"
         )
+        # cancels any pointers to time vectors
+        recording_group_lfp.reset_times()
         recording_lfp = recording_group_lfp
         is_1_0_probe = True
     else:  # 2.0 probe
@@ -564,7 +607,7 @@ def get_stream_mappings(
     neuropix_streams: list,
     num_blocks: int,
     ecephys_compressed_folder: Path,
-    min_duration_secs: int = 300,
+    min_duration_secs: int = 600,
     freq_min: float = 1,
     freq_max: float = 300,
     decimation_factor: int = 24,
@@ -594,7 +637,7 @@ def get_stream_mappings(
         Path to the folder containing the compressed Zarr recordings.
     min_duration_secs : int, optional
         Minimum duration (in seconds) separating main from surface recordings.
-        Defaults to 300 seconds.
+        Defaults to 600 seconds.
     freq_min : float, optional
         Lower cutoff frequency (Hz) for LFP bandpass filtering.
         Defaults to 1 Hz.
@@ -634,6 +677,8 @@ def get_stream_mappings(
                 ecephys_compressed_folder
                 / f"experiment{block_index + 1}_{stream_name}.zarr"
             )
+            # cancels any pointers to time vectors
+            recording.reset_times() 
             recording_groups = recording.split_by("group")
 
             for group in recording_groups:
@@ -643,10 +688,7 @@ def get_stream_mappings(
                 )
                 recording_group = recording_groups[group]
 
-                recording_time = (
-                    recording_group.get_num_samples()
-                    / recording_group.sampling_frequency
-                )
+
                 logging.info("Applying high pass filter to AP stream")
                 recording_group_ap_highpass = spre.highpass_filter(
                     recording_group
@@ -667,7 +709,7 @@ def get_stream_mappings(
                 )
 
                 # assume this is a surface finding recording
-                if recording_time < min_duration_secs:
+                if recording_group.get_duration() < min_duration_secs:
                     surface_recordings_ap[stream_name].append(
                         recording_group_ap_highpass
                     )
@@ -719,7 +761,15 @@ def save_rms_and_lfp_spectrum(
         If provided, this string will be included
         in the filenames for the saved metrics.
     """
+    logging.info("Computing rms")
+    start_time_rms = datetime.now()
     rms, rms_times = compute_rms(recording, n_jobs=n_jobs)
+    end_time_rms = datetime.now()
+    elapsed_time_rms = end_time_rms - start_time_rms
+    logging.info(
+        "Elapsed time for rms:"
+        f"{elapsed_time_rms.total_seconds():.6f} seconds"
+    )
 
     if not is_lfp:
         if tag is None:
@@ -749,6 +799,8 @@ def save_rms_and_lfp_spectrum(
             )
 
     if is_lfp:
+        logging.info("Computing LFP spectrum")
+        start_time_lfp_spectrum = datetime.now()
         lfp_sample_data = get_random_data_chunks(
             recording,
             num_chunks_per_segment=100,
@@ -776,6 +828,14 @@ def save_rms_and_lfp_spectrum(
             psd[:, i_channel] = Pxx
 
         freqs = freqs.astype(np.float32)
+        end_time_lfp_spectrum = datetime.now()
+        elapsed_time_lfp_spectrum = (
+            end_time_lfp_spectrum - start_time_lfp_spectrum
+        )
+        logging.info(
+            "Elapsed time for rms: "
+            f"{elapsed_time_lfp_spectrum.total_seconds():.6f} seconds"
+        )
         if tag is None:
             np.save(
                 output_folder / "_iblqc_ephysSpectralDensityLF.power.npy", psd
@@ -899,6 +959,13 @@ def get_main_recording_from_list(
         The recording with the largest number of samples
     """
 
+    if len(recordings) > 1:
+        logging.warning(
+            "Multiple main recordings of "
+            f"length {len(recordings)} found. "
+            "Defaulting to selecting recording with "
+            "largest number of samples"
+        )
     return max(recordings, key=lambda r: r.get_num_samples())
 
 
@@ -971,7 +1038,7 @@ def process_raw_data(
 def extract_continuous(
     sorting_folder: Path,
     results_folder: Path,
-    min_duration_secs: int = 300,
+    min_duration_secs: int = 600,
     probe_surface_finding: Union[Path, None] = None,
     lfp_freq_min: float = 1,
     lfp_freq_max: float = 300,
@@ -996,7 +1063,7 @@ def extract_continuous(
         will be written to files within this directory,
         typically in formats suitable for further analysis.
 
-    min_duration_secs : int, optional, default=300
+    min_duration_secs : int, optional, default=600
         The minimum duration (in seconds) of the continuous data
         that will be included in the extraction.
         Recordings shorter than this duration will be ignored.
@@ -1068,8 +1135,20 @@ def extract_continuous(
             min_duration_secs=min_duration_secs,
         )
 
-        # TODO: combine this with mappings above for
+        # combine this with mappings above for
         # seperate surface finding asset
+        main_recordings_ap = _merge_dicts(
+            main_recordings_ap, main_recordings_separate_ap
+        )
+        surface_recordings_ap = _merge_dicts(
+            surface_recordings_ap, surface_recordings_separate_ap
+        )
+        main_recordings_lfp = _merge_dicts(
+            main_recordings_lfp, main_recordings_separate_lfp
+        )
+        surface_recordings_lfp = _merge_dicts(
+            surface_recordings_lfp, surface_separate_recordings_lfp
+        )
 
     logging.info(
         "Looking at AP recordings, "
