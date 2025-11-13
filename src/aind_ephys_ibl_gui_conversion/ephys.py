@@ -885,9 +885,8 @@ def save_rms_and_lfp_spectrum(
                 "n_jobs_parallel": n_jobs,
             },
             code_url=str(
-                "https://github.com/SpikeInterface/spikeinterface/blob/"
-                "d6f8c5af9d33aca3d9191472205b91adc3ca1faf/src/"
-                "spikeinterface/exporters/to_ibl.py#L243"
+                "https://github.com/AllenNeuralDynamics/"
+                "aind-ephys-ibl-gui-conversion"
             ),
             notes=str(
                 f"LFP spectral density for ephys {output_folder.stem} "
