@@ -1355,6 +1355,6 @@ def extract_continuous(
         processor_full_name="Ephys IBL Conversion",
     )
     processing = Processing(processing_pipeline=pipeline_process)
-    processing.write_standard_file(output_direcctory=Path(results_folder))
+    processing.write_standard_file(output_directory=Path(results_folder))
     create_derived_data_description(session_folder, Path(results_folder))
     copy_ancillary_files(session_folder, Path(results_folder))
