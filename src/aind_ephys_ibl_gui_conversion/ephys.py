@@ -599,13 +599,12 @@ def get_neuropixel_lfp_stream(
     """
     if "AP" in stream_name:  # 1.0 probe - seperate stream
         stream_name_lfp = stream_name.replace("AP", "LFP")
-        recording_group_lfp = si.read_zarr(
+        recording_lfp = si.read_zarr(
             ecephys_compressed_folder
             / f"experiment{block_index + 1}_{stream_name_lfp}.zarr"
         )
         # cancels any pointers to time vectors
-        recording_group_lfp.reset_times()
-        recording_lfp = recording_group_lfp
+        recording_lfp.reset_times()
         is_1_0_probe = True
     else:  # 2.0 probe
         recording_lfp = recording
@@ -690,49 +689,42 @@ def get_stream_mappings(
             )
             # cancels any pointers to time vectors
             recording.reset_times()
-            recording_groups = recording.split_by("group")
 
-            for group in recording_groups:
-                logging.info(
-                    f"Processing stream {stream_name} for block "
-                    f"{block_index} and group {group}"
-                )
-                recording_group = recording_groups[group]
 
-                logging.info("Applying high pass filter to AP stream")
-                recording_group_ap_highpass = spre.highpass_filter(
-                    recording_group
-                )
+            logging.info("Applying high pass filter to AP stream")
+            recording_ap_highpass = spre.highpass_filter(
+                recording
+            )
 
-                recording_lfp, is_1_0_probe = get_neuropixel_lfp_stream(
-                    recording_group,
-                    stream_name,
-                    ecephys_compressed_folder,
-                    block_index,
-                )
-                recording_lfp_processed = process_lfp_stream(
-                    recording_lfp,
-                    is_1_0_probe,
-                    freq_min,
-                    freq_max,
-                    decimation_factor,
-                )
+            recording_lfp, is_1_0_probe = get_neuropixel_lfp_stream(
+                recording,
+                stream_name,
+                ecephys_compressed_folder,
+                block_index,
+            )
+            recording_lfp_processed = process_lfp_stream(
+                recording_lfp,
+                is_1_0_probe,
+                freq_min,
+                freq_max,
+                decimation_factor,
+            )
 
-                # assume this is a surface finding recording
-                if recording_group.get_duration() < min_duration_secs:
-                    surface_recordings_ap[stream_name].append(
-                        recording_group_ap_highpass
-                    )
-                    surface_recordings_lfp[stream_name].append(
-                        recording_lfp_processed
-                    )
-                else:
-                    main_recordings_ap[stream_name].append(
-                        recording_group_ap_highpass
-                    )
-                    main_recordings_lfp[stream_name].append(
-                        recording_lfp_processed
-                    )
+            # assume this is a surface finding recording
+            if recording.get_duration() < min_duration_secs:
+                surface_recordings_ap[stream_name].append(
+                    recording_ap_highpass
+                )
+                surface_recordings_lfp[stream_name].append(
+                    recording_lfp_processed
+                )
+            else:
+                main_recordings_ap[stream_name].append(
+                    recording_ap_highpass
+                )
+                main_recordings_lfp[stream_name].append(
+                    recording_lfp_processed
+                )
 
     return (
         main_recordings_ap,
