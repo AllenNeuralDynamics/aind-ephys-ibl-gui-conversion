@@ -690,6 +690,10 @@ def get_stream_mappings(
             # cancels any pointers to time vectors
             recording.reset_times()
 
+            logging.info(
+                f"Processing stream {stream_name} for "
+                f"block index {block_index}"
+            )
             logging.info("Applying high pass filter to AP stream")
             recording_ap_highpass = spre.highpass_filter(recording)
 
