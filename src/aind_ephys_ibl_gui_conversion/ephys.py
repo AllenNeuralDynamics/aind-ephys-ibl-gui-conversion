@@ -690,11 +690,8 @@ def get_stream_mappings(
             # cancels any pointers to time vectors
             recording.reset_times()
 
-
             logging.info("Applying high pass filter to AP stream")
-            recording_ap_highpass = spre.highpass_filter(
-                recording
-            )
+            recording_ap_highpass = spre.highpass_filter(recording)
 
             recording_lfp, is_1_0_probe = get_neuropixel_lfp_stream(
                 recording,
@@ -719,9 +716,7 @@ def get_stream_mappings(
                     recording_lfp_processed
                 )
             else:
-                main_recordings_ap[stream_name].append(
-                    recording_ap_highpass
-                )
+                main_recordings_ap[stream_name].append(recording_ap_highpass)
                 main_recordings_lfp[stream_name].append(
                     recording_lfp_processed
                 )
