@@ -25,6 +25,9 @@ dependencies = [
     "tqdm>=4.66.1",
     "wavpack-numcodecs",
     "numpy==2.0.1",
+    "aind-data-schema<2.0",
+    "aind-data-schema-models==0.7.5",
+    "aind-metadata-upgrader==0.0.24"
 ]
 
 [project.optional-dependencies]
