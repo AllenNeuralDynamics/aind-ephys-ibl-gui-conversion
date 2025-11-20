@@ -793,7 +793,7 @@ def save_rms_and_lfp_spectrum(
             "spikeinterface/exporters/to_ibl.py#L243"
         ),
         notes=str(
-            f"RMS for ephys {output_folder.stem}. Either AP or LFP stream."
+            f"RMS for ephys {output_folder.stem}. Either AP or LFP stream. "
             f"Is LFP: {is_lfp}",
         ),
     )
@@ -873,7 +873,8 @@ def save_rms_and_lfp_spectrum(
             input_location="/data",
             output_location=output_folder.as_posix(),
             parameters={
-                "n_jobs_parallel": n_jobs,
+                "number_chunks_per_segment": 100,
+                "chunk_duration": "1s"
             },
             code_url=str(
                 "https://github.com/AllenNeuralDynamics/"
@@ -881,7 +882,6 @@ def save_rms_and_lfp_spectrum(
             ),
             notes=str(
                 f"LFP spectral density for ephys {output_folder.stem} "
-                "either AP or LFP stream."
             ),
         )
         data_processes.append(data_process_lfp_spectrum)
