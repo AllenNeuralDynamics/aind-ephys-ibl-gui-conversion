@@ -603,13 +603,13 @@ def get_neuropixel_lfp_stream(
             ecephys_compressed_folder
             / f"experiment{block_index + 1}_{stream_name_lfp}.zarr"
         )
-        # cancels any pointers to time vectors
-        recording_lfp.reset_times()
         is_1_0_probe = True
     else:  # 2.0 probe
         recording_lfp = recording
         is_1_0_probe = False
 
+    # cancels any pointers to time vectors
+    recording_lfp.reset_times()
     return recording_lfp, is_1_0_probe
 
 
@@ -798,33 +798,19 @@ def save_rms_and_lfp_spectrum(
         ),
     )
     data_processes.append(data_process_rms)
-
+    tag = tag if tag is not None else ""
     if not is_lfp:
-        if tag is None:
-            np.save(output_folder / "_iblqc_ephysTimeRmsAP.rms.npy", rms)
-            np.save(
-                output_folder / "_iblqc_ephysTimeRmsAP.timestamps.npy",
-                rms_times,
-            )
-        else:
-            np.save(output_folder / f"_iblqc_ephysTimeRmsAP{tag}.rms.npy", rms)
-            np.save(
-                output_folder / f"_iblqc_ephysTimeRmsAP{tag}.timestamps.npy",
-                rms_times,
-            )
+        np.save(output_folder / f"_iblqc_ephysTimeRmsAP{tag}.rms.npy", rms)
+        np.save(
+            output_folder / f"_iblqc_ephysTimeRmsAP{tag}.timestamps.npy",
+            rms_times,
+        )
     else:
-        if tag is None:
-            np.save(output_folder / "_iblqc_ephysTimeRmsLF.rms.npy", rms)
-            np.save(
-                output_folder / "_iblqc_ephysTimeRmsLF.timestamps.npy",
-                rms_times,
-            )
-        else:
-            np.save(output_folder / f"_iblqc_ephysTimeRmsLF{tag}.rms.npy", rms)
-            np.save(
-                output_folder / f"_iblqc_ephysTimeRmsLF{tag}.timestamps.npy",
-                rms_times,
-            )
+        np.save(output_folder / f"_iblqc_ephysTimeRmsLF{tag}.rms.npy", rms)
+        np.save(
+            output_folder / f"_iblqc_ephysTimeRmsLF{tag}.timestamps.npy",
+            rms_times,
+        )
 
     if is_lfp:
         logging.info("Computing LFP spectrum")
@@ -886,25 +872,16 @@ def save_rms_and_lfp_spectrum(
         )
         data_processes.append(data_process_lfp_spectrum)
 
-        if tag is None:
-            np.save(
-                output_folder / "_iblqc_ephysSpectralDensityLF.power.npy", psd
-            )
-            np.save(
-                output_folder / "_iblqc_ephysSpectralDensityLF.freqs.npy",
-                freqs,
-            )
-        else:
-            np.save(
-                output_folder
-                / f"_iblqc_ephysSpectralDensityLF{tag}.power.npy",
-                psd,
-            )
-            np.save(
-                output_folder
-                / f"_iblqc_ephysSpectralDensityLF{tag}.freqs.npy",
-                freqs,
-            )
+        np.save(
+            output_folder
+            / f"_iblqc_ephysSpectralDensityLF{tag}.power.npy",
+            psd,
+        )
+        np.save(
+            output_folder
+            / f"_iblqc_ephysSpectralDensityLF{tag}.freqs.npy",
+            freqs,
+        )
     return data_processes
 
 
