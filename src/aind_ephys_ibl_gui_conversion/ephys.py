@@ -23,7 +23,7 @@ from aind_data_schema.core.processing import (
     PipelineProcess,
     Processing,
 )
-from aind_data_schema_models.process_name import ProcessName
+from aind_data_schema_models.process_names import ProcessName
 from aind_metadata_upgrader.data_description_upgrade import (
     DataDescriptionUpgrade,
 )
