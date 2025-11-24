@@ -8,6 +8,7 @@ import re
 import shutil
 from collections import defaultdict
 from datetime import datetime
+from importlib import metadata
 from pathlib import Path
 from typing import List, Union
 
@@ -22,6 +23,7 @@ from aind_data_schema.core.processing import (
     PipelineProcess,
     Processing,
 )
+from aind_data_schema_models.process_name import ProcessName
 from aind_metadata_upgrader.data_description_upgrade import (
     DataDescriptionUpgrade,
 )
@@ -777,20 +779,34 @@ def save_rms_and_lfp_spectrum(
         "Elapsed time for rms:"
         f"{elapsed_time_rms.total_seconds():.6f} seconds"
     )
+
+    tag = tag if tag is not None else ""
+
+    if not is_lfp:
+        file_path_to_save_rms = f"_iblqc_ephysTimeRmsAP{tag}.rms.npy"
+        file_path_to_save_times = f"_iblqc_ephysTimeRmsAP{tag}.timestamps.npy"
+    else:
+        file_path_to_save_rms = f"_iblqc_ephysTimeRmsLF{tag}.rms.npy"
+        file_path_to_save_times = f"_iblqc_ephysTimeRmsLF{tag}.timestamps.npy"
+
+    np.save(output_folder / file_path_to_save_rms, rms)
+    np.save(
+        output_folder / file_path_to_save_times,
+        rms_times,
+    )
+
     data_process_rms = DataProcess(
-        name="Other",
+        name=ProcessName.EPHYS_VISUALIZATION,
         software_version=si.__version__,
         start_date_time=start_time_rms,
         end_date_time=end_time_rms,
         input_location="/data",
-        output_location=output_folder.as_posix(),
+        output_location=(output_folder / file_path_to_save_rms).as_posix(),
         parameters={
             "n_jobs_parallel": n_jobs,
         },
         code_url=str(
-            "https://github.com/SpikeInterface/spikeinterface/blob/"
-            "d6f8c5af9d33aca3d9191472205b91adc3ca1faf/src/"
-            "spikeinterface/exporters/to_ibl.py#L243"
+            "https://github.com/SpikeInterface/spikeinterface"
         ),
         notes=str(
             f"RMS for ephys {output_folder.stem}. Either AP or LFP stream. "
@@ -798,19 +814,6 @@ def save_rms_and_lfp_spectrum(
         ),
     )
     data_processes.append(data_process_rms)
-    tag = tag if tag is not None else ""
-    if not is_lfp:
-        np.save(output_folder / f"_iblqc_ephysTimeRmsAP{tag}.rms.npy", rms)
-        np.save(
-            output_folder / f"_iblqc_ephysTimeRmsAP{tag}.timestamps.npy",
-            rms_times,
-        )
-    else:
-        np.save(output_folder / f"_iblqc_ephysTimeRmsLF{tag}.rms.npy", rms)
-        np.save(
-            output_folder / f"_iblqc_ephysTimeRmsLF{tag}.timestamps.npy",
-            rms_times,
-        )
 
     if is_lfp:
         logging.info("Computing LFP spectrum")
@@ -852,34 +855,32 @@ def save_rms_and_lfp_spectrum(
         )
 
         data_process_lfp_spectrum = DataProcess(
-            name="Other",
-            software_version=si.__version__,
+            name=ProcessName.EPHYS_VISUALIZATION,
+            software_version=metadata.version("aind-ephys-ibl-gui-conversion"),
             start_date_time=start_time_rms,
             end_date_time=end_time_rms,
             input_location="/data",
-            output_location=output_folder.as_posix(),
+            output_location=(
+                output_folder / f"_iblqc_ephysSpectralDensityLF{tag}.power.npy"
+            ).as_posix(),
             parameters={
                 "number_chunks_per_segment": 100,
-                "chunk_duration": "1s"
+                "chunk_duration": "1s",
             },
             code_url=str(
                 "https://github.com/AllenNeuralDynamics/"
                 "aind-ephys-ibl-gui-conversion"
             ),
-            notes=str(
-                f"LFP spectral density for ephys {output_folder.stem} "
-            ),
+            notes=str(f"LFP spectral density for ephys {output_folder.stem} "),
         )
         data_processes.append(data_process_lfp_spectrum)
 
         np.save(
-            output_folder
-            / f"_iblqc_ephysSpectralDensityLF{tag}.power.npy",
+            output_folder / f"_iblqc_ephysSpectralDensityLF{tag}.power.npy",
             psd,
         )
         np.save(
-            output_folder
-            / f"_iblqc_ephysSpectralDensityLF{tag}.freqs.npy",
+            output_folder / f"_iblqc_ephysSpectralDensityLF{tag}.freqs.npy",
             freqs,
         )
     return data_processes
