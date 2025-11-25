@@ -852,11 +852,11 @@ def save_rms_and_lfp_spectrum(
         logging.info(
             "Elapsed time for LFP spectrum: "
             f"{elapsed_time_lfp_spectrum.total_seconds():.6f} seconds"
-        )
+        )   
 
+        # TODO: add version once package is published
         data_process_lfp_spectrum = DataProcess(
             name=ProcessName.EPHYS_VISUALIZATION,
-            software_version=metadata.version("aind-ephys-ibl-gui-conversion"),
             start_date_time=start_time_rms,
             end_date_time=end_time_rms,
             input_location="/data",
