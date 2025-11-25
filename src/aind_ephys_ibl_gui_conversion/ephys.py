@@ -8,7 +8,6 @@ import re
 import shutil
 from collections import defaultdict
 from datetime import datetime
-from importlib import metadata
 from pathlib import Path
 from typing import List, Union
 
@@ -805,9 +804,7 @@ def save_rms_and_lfp_spectrum(
         parameters={
             "n_jobs_parallel": n_jobs,
         },
-        code_url=str(
-            "https://github.com/SpikeInterface/spikeinterface"
-        ),
+        code_url=str("https://github.com/SpikeInterface/spikeinterface"),
         notes=str(
             f"RMS for ephys {output_folder.stem}. Either AP or LFP stream. "
             f"Is LFP: {is_lfp}",
@@ -852,7 +849,7 @@ def save_rms_and_lfp_spectrum(
         logging.info(
             "Elapsed time for LFP spectrum: "
             f"{elapsed_time_lfp_spectrum.total_seconds():.6f} seconds"
-        )   
+        )
 
         # TODO: add version once package is published
         data_process_lfp_spectrum = DataProcess(
