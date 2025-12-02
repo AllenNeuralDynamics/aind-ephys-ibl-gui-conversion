@@ -607,6 +607,7 @@ def get_neuropixel_lfp_stream(
         is_1_0_probe = True
     else:  # 2.0 probe
         recording_lfp = recording
+        recording_lfp.reset_times()
         is_1_0_probe = False
 
     # cancels any pointers to time vectors
