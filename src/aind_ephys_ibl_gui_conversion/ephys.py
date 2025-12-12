@@ -1052,6 +1052,18 @@ def process_raw_data(
             recording_combined, output_folder, is_lfp=is_lfp
         )
 
+    if recording_combined is not None:
+        # need appended channel locations
+        # so app can show surface recording locations also
+        channel_locations = recording_combined.get_channel_locations()
+        channel_inds = np.arange(recording_combined.get_num_channels())
+    else:
+        channel_locations = main_recording.get_channel_locations()
+        channel_inds = np.arange(main_recording.get_num_channels())
+
+    np.save(output_folder / "channels.localCoordinates.npy", channel_locations)
+    np.save(output_folder / "channels.rawInd.npy", channel_inds)
+
     logging.info(
         "Running RMS and LFP spectrum (if LFP stream) "
         f"on main recording for stream {stream_name}"
