@@ -1181,6 +1181,7 @@ def extract_continuous(
             stream_name_ap,
             results_folder,
             is_lfp=False,
+            target_freq_resolution_psd=target_freq_resolution_psd
         )
 
     logging.info(
@@ -1219,4 +1220,5 @@ def extract_continuous(
             stream_name_lfp,
             results_folder,
             is_lfp=True,
+            target_freq_resolution_psd=target_freq_resolution_psd
         )
