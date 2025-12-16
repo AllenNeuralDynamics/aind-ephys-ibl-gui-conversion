@@ -610,7 +610,7 @@ def get_stream_mappings(
     neuropix_streams: list,
     num_blocks: int,
     ecephys_compressed_folder: Path,
-    min_duration_secs: int = 600,
+    main_recording_min_secs: int = 600,
     freq_min: float = 1,
     freq_max: float = 300,
     target_sample_rate: float = 1250,
@@ -625,7 +625,7 @@ def get_stream_mappings(
     - AP data: high-pass filtered.
     - LFP data: bandpass filtered (and decimated for 2.0 probes).
 
-    Recordings shorter than `min_duration_secs` are assumed to be
+    Recordings shorter than `main_recording_min_secs` are assumed to be
     surface-finding sessions, while longer recordings are considered
     main sessions.
 
@@ -638,7 +638,7 @@ def get_stream_mappings(
         Number of experiment blocks to process.
     ecephys_compressed_folder : Path
         Path to the folder containing the compressed Zarr recordings.
-    min_duration_secs : int, optional
+    main_recording_min_secs : int, optional
         Minimum duration (in seconds) separating main from surface recordings.
         Defaults to 600 seconds.
     freq_min : float, optional
@@ -705,7 +705,7 @@ def get_stream_mappings(
             )
 
             # assume this is a surface finding recording
-            if recording.get_duration() < min_duration_secs:
+            if recording.get_duration() < main_recording_min_secs:
                 surface_recordings_ap[stream_name].append(
                     recording_ap_highpass
                 )
@@ -1028,7 +1028,7 @@ def process_raw_data(
 def extract_continuous(
     sorting_folder: Path,
     results_folder: Path,
-    min_duration_secs: int = 600,
+    main_recording_min_secs: int = 600,
     probe_surface_finding: Union[Path, None] = None,
     lfp_freq_min: float = 1,
     lfp_freq_max: float = 300,
@@ -1054,10 +1054,9 @@ def extract_continuous(
         will be written to files within this directory,
         typically in formats suitable for further analysis.
 
-    min_duration_secs : int, optional, default=600
-        The minimum duration (in seconds) of the continuous data
-        that will be included in the extraction.
-        Recordings shorter than this duration will be ignored.
+    main_recording_min_secs : int, optional, default=600
+        Minimum duration (in seconds) separating main from surface recordings.
+        Defaults to 600 seconds.
 
     probe_surface_finding : Path or None, optional, default=None
         The path to a file that contains information about
@@ -1110,7 +1109,7 @@ def extract_continuous(
         neuropix_streams,
         num_blocks,
         ecephys_compressed_folder,
-        min_duration_secs=min_duration_secs,
+        main_recording_min_secs=main_recording_min_secs,
         freq_min=lfp_freq_min,
         freq_max=lfp_freq_max,
         target_sample_rate=target_sample_rate,
@@ -1127,7 +1126,7 @@ def extract_continuous(
             neuropix_streams_surface,
             num_blocks,
             ecephys_compressed_folder_surface,
-            min_duration_secs=min_duration_secs,
+            main_recording_min_secs=main_recording_min_secs,
             freq_min=lfp_freq_min,
             freq_max=lfp_freq_max,
             target_sample_rate=target_sample_rate,
