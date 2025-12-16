@@ -2,21 +2,18 @@
 Functions to process ephys data
 """
 
-import json
 import logging
 import re
-import shutil
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import DefaultDict, List, Union, TypeVar
+from typing import DefaultDict, List, TypeVar, Union
 
 import numpy as np
 import pandas as pd
 import spikeinterface as si
 import spikeinterface.extractors as se
 import spikeinterface.preprocessing as spre
-
 from scipy.signal import welch
 from spikeinterface.core import get_random_data_chunks
 from spikeinterface.exporters import export_to_phy
@@ -25,7 +22,8 @@ from spikeinterface.exporters.to_ibl import compute_rms
 STREAM_PROBE_REGEX = re.compile(r"^Record Node \d+#[^.]+\.(.+?)(-AP|-LFP)?$")
 T = TypeVar("T")
 
-def _merge_main_and_surface_recording_dicts(    
+
+def _merge_main_and_surface_recording_dicts(
     d1: DefaultDict[str, list[T]],
     d2: DefaultDict[str, list[T]],
 ) -> DefaultDict[str, list[T]]:
@@ -787,7 +785,6 @@ def save_rms_and_lfp_spectrum(
         rms_times,
     )
 
-
     if is_lfp:
         logging.info("Computing LFP spectrum")
         start_time_lfp_spectrum = datetime.now()
@@ -799,7 +796,7 @@ def save_rms_and_lfp_spectrum(
         )
         fs = recording.sampling_frequency
 
-        nperseg = int(fs / target_freq_resolution)
+        nperseg = int(fs / target_freq_resolution_psd)
         nperseg = 2 ** int(np.log2(nperseg))  # round to nearest power of 2
 
         # Preallocate PSD array
@@ -953,7 +950,7 @@ def process_raw_data(
     stream_name: str,
     results_folder: str,
     is_lfp: bool,
-    target_freq_resolution_psd: float
+    target_freq_resolution_psd: float,
 ):
     """
     Processes raw data for a given stream by computing RMS and (if applicable)
@@ -981,7 +978,7 @@ def process_raw_data(
     is_lfp : bool
         Whether this is an LFP recording. If True, LFP spectrum analysis
         will also be performed.
-    
+
     target_freq_resolution_psd: float
         Target frequency resolution for PSD in Hz
 
@@ -1020,8 +1017,11 @@ def process_raw_data(
         f"on main recording for stream {stream_name}"
     )
     save_rms_and_lfp_spectrum(
-        main_recording, output_folder, target_freq_resolution_psd,
-        is_lfp=is_lfp, tag="Main",
+        main_recording,
+        output_folder,
+        target_freq_resolution_psd,
+        is_lfp=is_lfp,
+        tag="Main",
     )
 
 
@@ -1034,7 +1034,7 @@ def extract_continuous(
     lfp_freq_max: float = 300,
     num_parallel_jobs: int = 10,
     target_sample_rate: float = 1250,
-    target_freq_resolution_psd: float = 0.5
+    target_freq_resolution_psd: float = 0.5,
 ):
     """
     Extract features from raw data
@@ -1078,9 +1078,9 @@ def extract_continuous(
         Number of parallel jobs to use
 
     target_sample_rate : float, default = 1250
-        The target sample rate in Hz to 
+        The target sample rate in Hz to
         downsample to (only used for 2.0 probes).
-    
+
     target_freq_resolution_psd: float, default = 0.5
         Target frequency resolution for PSD in Hz
     """
@@ -1113,7 +1113,7 @@ def extract_continuous(
         min_duration_secs=min_duration_secs,
         freq_min=lfp_freq_min,
         freq_max=lfp_freq_max,
-        decimation_factor=decimation_factor,
+        target_sample_rate=target_sample_rate,
     )
     if (
         len(neuropix_streams_surface) > 0
@@ -1128,6 +1128,9 @@ def extract_continuous(
             num_blocks,
             ecephys_compressed_folder_surface,
             min_duration_secs=min_duration_secs,
+            freq_min=lfp_freq_min,
+            freq_max=lfp_freq_max,
+            target_sample_rate=target_sample_rate,
         )
 
         # combine this with mappings above for
@@ -1218,4 +1221,3 @@ def extract_continuous(
             results_folder,
             is_lfp=True,
         )
-        
