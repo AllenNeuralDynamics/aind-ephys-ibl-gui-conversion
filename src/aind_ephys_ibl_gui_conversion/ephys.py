@@ -985,9 +985,7 @@ def process_raw_data(
     """
     probe_name = _stream_to_probe_name(stream_name)
     output_folder = Path(results_folder) / probe_name
-    logging.info(
-        f"Creating output directory at {output_folder}"
-    )
+    logging.info(f"Creating output directory at {output_folder}")
     output_folder.mkdir(exist_ok=True)
 
     logging.info(f"LFP Stream: {is_lfp}")
@@ -997,8 +995,10 @@ def process_raw_data(
             f"on concatenated recording for stream {stream_name}"
         )
         save_rms_and_lfp_spectrum(
-            recording_combined, output_folder, target_freq_resolution_psd,
-             is_lfp=is_lfp
+            recording_combined,
+            output_folder,
+            target_freq_resolution_psd,
+            is_lfp=is_lfp,
         )
 
     if recording_combined is not None:
@@ -1182,7 +1182,7 @@ def extract_continuous(
             stream_name_ap,
             results_folder,
             is_lfp=False,
-            target_freq_resolution_psd=target_freq_resolution_psd
+            target_freq_resolution_psd=target_freq_resolution_psd,
         )
 
     logging.info(
@@ -1221,5 +1221,5 @@ def extract_continuous(
             stream_name_lfp,
             results_folder,
             is_lfp=True,
-            target_freq_resolution_psd=target_freq_resolution_psd
+            target_freq_resolution_psd=target_freq_resolution_psd,
         )
