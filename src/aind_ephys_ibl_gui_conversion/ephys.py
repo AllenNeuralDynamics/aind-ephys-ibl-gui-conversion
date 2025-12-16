@@ -9,64 +9,53 @@ import shutil
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import List, Union
+from typing import DefaultDict, List, Union, TypeVar
 
 import numpy as np
 import pandas as pd
 import spikeinterface as si
 import spikeinterface.extractors as se
 import spikeinterface.preprocessing as spre
-from aind_data_schema.core.data_description import DerivedDataDescription
-from aind_data_schema.core.processing import (
-    DataProcess,
-    PipelineProcess,
-    Processing,
-)
-from aind_data_schema_models.process_names import ProcessName
-from aind_metadata_upgrader.data_description_upgrade import (
-    DataDescriptionUpgrade,
-)
+
 from scipy.signal import welch
 from spikeinterface.core import get_random_data_chunks
 from spikeinterface.exporters import export_to_phy
 from spikeinterface.exporters.to_ibl import compute_rms
 
 STREAM_PROBE_REGEX = re.compile(r"^Record Node \d+#[^.]+\.(.+?)(-AP|-LFP)?$")
+T = TypeVar("T")
 
-
-def _merge_dicts(d1: defaultdict, d2: defaultdict) -> defaultdict:
+def _merge_main_and_surface_recording_dicts(    
+    d1: DefaultDict[str, list[T]],
+    d2: DefaultDict[str, list[T]],
+) -> DefaultDict[str, list[T]]:
     """
-    Merge two ``defaultdict(list)`` objects into a new ``defaultdict(list)``.
+    Merge main and surface recordings when surface ephys
+    is recorded as a separate data asset.
 
-    This function returns a new ``defaultdict(list)`` containing all key–value
-    pairs from both input dictionaries. If a key appears in both, their lists
-    are concatenated in order (values from ``d1`` first, then ``d2``). The
-    inputs are not modified.
-
-    Used for keeping track of mappings when surface recroding is a seperate
-    data asset.
+    Keys are expected to overlap; values are concatenated.
 
     Parameters
     ----------
-    d1 : defaultdict
-        The first ``defaultdict(list)`` to merge.
-    d2 : defaultdict
-        The second ``defaultdict(list)`` to merge.
+    d1 : DefaultDict[str, list[T]]
+        The first object to merge.
+    d2 : DefaultDict[str, list[T]]
+        The second object to merge.
 
     Returns
     -------
-    defaultdict
-        A new ``defaultdict(list)`` containing the merged key–value pairs.
+    DefaultDict[str, list[T]]
+        A new default dict containing the merged key–value pairs.
 
     Examples
     --------
     >>> from collections import defaultdict
     >>> a = defaultdict(list, {'x': [1, 2], 'y': [3]})
     >>> b = defaultdict(list, {'y': [4], 'z': [5]})
-    >>> merge_defaultdicts(a, b)
+    >>> _merge_main_and_surface_recording_dicts(a, b)
     defaultdict(<class 'list'>, {'x': [1, 2], 'y': [3, 4], 'z': [5]})
     """
-    merged = defaultdict(list)
+    merged = defaultdict(d1.default_factory)
     for k, v in d1.items():
         merged[k].extend(v)
     for k, v in d2.items():
@@ -508,7 +497,7 @@ def process_lfp_stream(
     is_1_0_probe: bool,
     freq_min: float,
     freq_max: float,
-    decimation_factor: int,
+    target_sample_rate: float,
 ) -> si.BaseRecording:
     """
     Apply LFP preprocessing to a Neuropixels recording.
@@ -529,9 +518,8 @@ def process_lfp_stream(
         The lower cutoff frequency for the bandpass filter (in Hz).
     freq_max : float
         The upper cutoff frequency for the bandpass filter (in Hz).
-    decimation_factor : int
-        The factor by which to downsample the
-        signal (only used for 2.0 probes).
+    target_sample_rate : float
+        The target sample rate to downsample to (only used for 2.0 probes).
 
     Returns
     -------
@@ -557,7 +545,13 @@ def process_lfp_stream(
         recording_lfp_bandpass = spre.bandpass_filter(
             recording, freq_min=freq_min, freq_max=freq_max
         )
-        logging.info(f"Applying decimation with factor {decimation_factor}")
+        decimation_factor = int(
+            recording_lfp_bandpass.sampling_frequency / target_sample_rate
+        )
+        logging.info(
+            f"Applying decimation with factor {decimation_factor} "
+            f"to target sample rate {target_sample_rate}"
+        )
         return spre.decimate(
             recording_lfp_bandpass, decimation_factor=decimation_factor
         )
@@ -621,7 +615,7 @@ def get_stream_mappings(
     min_duration_secs: int = 600,
     freq_min: float = 1,
     freq_max: float = 300,
-    decimation_factor: int = 24,
+    target_sample_rate: float = 1250,
 ) -> tuple[dict, dict, dict, dict]:
     """
     Generate mappings between Neuropixels streams and their corresponding
@@ -709,7 +703,7 @@ def get_stream_mappings(
                 is_1_0_probe,
                 freq_min,
                 freq_max,
-                decimation_factor,
+                target_sample_rate,
             )
 
             # assume this is a surface finding recording
@@ -737,10 +731,11 @@ def get_stream_mappings(
 def save_rms_and_lfp_spectrum(
     recording: si.BaseRecording,
     output_folder: Path,
+    target_freq_resolution_psd: float,
     n_jobs: int = 10,
     is_lfp: bool = False,
     tag: Union[str, None] = None,
-) -> List[DataProcess]:
+) -> None:
     """
     Saves rms and lfp spectrum for the given recording
 
@@ -751,6 +746,9 @@ def save_rms_and_lfp_spectrum(
 
     output_folder: Path
         The output folder to save outputs to
+
+    target_freq_resolution_psd: float
+        Target frequency resolution for PSD in Hz
 
     n_jobs: int, default = 10
         The number of jobs to parallelize rms
@@ -763,12 +761,7 @@ def save_rms_and_lfp_spectrum(
         If provided, this string will be included
         in the filenames for the saved metrics.
 
-    Returns
-    -------
-    List[DataProcess]
-        List of data process objects for metadata capture
     """
-    data_processes = []
     logging.info("Computing rms")
     start_time_rms = datetime.now()
     rms, rms_times = compute_rms(recording, n_jobs=n_jobs)
@@ -794,23 +787,6 @@ def save_rms_and_lfp_spectrum(
         rms_times,
     )
 
-    data_process_rms = DataProcess(
-        name=ProcessName.EPHYS_VISUALIZATION,
-        software_version=si.__version__,
-        start_date_time=start_time_rms,
-        end_date_time=end_time_rms,
-        input_location="/data",
-        output_location=(output_folder / file_path_to_save_rms).as_posix(),
-        parameters={
-            "n_jobs_parallel": n_jobs,
-        },
-        code_url=str("https://github.com/SpikeInterface/spikeinterface"),
-        notes=str(
-            f"RMS for ephys {output_folder.stem}. Either AP or LFP stream. "
-            f"Is LFP: {is_lfp}",
-        ),
-    )
-    data_processes.append(data_process_rms)
 
     if is_lfp:
         logging.info("Computing LFP spectrum")
@@ -823,8 +799,6 @@ def save_rms_and_lfp_spectrum(
         )
         fs = recording.sampling_frequency
 
-        # Target frequency resolution for PSD (0.5 Hz)
-        target_freq_resolution = 0.5
         nperseg = int(fs / target_freq_resolution)
         nperseg = 2 ** int(np.log2(nperseg))  # round to nearest power of 2
 
@@ -851,27 +825,6 @@ def save_rms_and_lfp_spectrum(
             f"{elapsed_time_lfp_spectrum.total_seconds():.6f} seconds"
         )
 
-        # TODO: add version once package is published
-        data_process_lfp_spectrum = DataProcess(
-            name=ProcessName.EPHYS_VISUALIZATION,
-            start_date_time=start_time_rms,
-            end_date_time=end_time_rms,
-            input_location="/data",
-            output_location=(
-                output_folder / f"_iblqc_ephysSpectralDensityLF{tag}.power.npy"
-            ).as_posix(),
-            parameters={
-                "number_chunks_per_segment": 100,
-                "chunk_duration": "1s",
-            },
-            code_url=str(
-                "https://github.com/AllenNeuralDynamics/"
-                "aind-ephys-ibl-gui-conversion"
-            ),
-            notes=str(f"LFP spectral density for ephys {output_folder.stem} "),
-        )
-        data_processes.append(data_process_lfp_spectrum)
-
         np.save(
             output_folder / f"_iblqc_ephysSpectralDensityLF{tag}.power.npy",
             psd,
@@ -880,7 +833,6 @@ def save_rms_and_lfp_spectrum(
             output_folder / f"_iblqc_ephysSpectralDensityLF{tag}.freqs.npy",
             freqs,
         )
-    return data_processes
 
 
 def get_largest_segment_recordings(
@@ -1001,7 +953,8 @@ def process_raw_data(
     stream_name: str,
     results_folder: str,
     is_lfp: bool,
-) -> List[DataProcess]:
+    target_freq_resolution_psd: float
+):
     """
     Processes raw data for a given stream by computing RMS and (if applicable)
     LFP power spectrum for both the main and
@@ -1028,11 +981,10 @@ def process_raw_data(
     is_lfp : bool
         Whether this is an LFP recording. If True, LFP spectrum analysis
         will also be performed.
+    
+    target_freq_resolution_psd: float
+        Target frequency resolution for PSD in Hz
 
-    Returns
-    -------
-    List[DataProcess]
-        List of data process objects for metadata capture
     """
     probe_name = _stream_to_probe_name(stream_name)
     output_folder = Path(results_folder) / probe_name
@@ -1042,13 +994,12 @@ def process_raw_data(
     output_folder.mkdir(exist_ok=True)
 
     logging.info(f"LFP Stream: {is_lfp}")
-    data_processes_combined = []
     if recording_combined is not None:
         logging.info(
             "Running RMS and LFP spectrum (if LFP stream) "
             f"on concatenated recording for stream {stream_name}"
         )
-        data_processes_combined = save_rms_and_lfp_spectrum(
+        save_rms_and_lfp_spectrum(
             recording_combined, output_folder, is_lfp=is_lfp
         )
 
@@ -1068,67 +1019,9 @@ def process_raw_data(
         "Running RMS and LFP spectrum (if LFP stream) "
         f"on main recording for stream {stream_name}"
     )
-    data_processes_main = save_rms_and_lfp_spectrum(
-        main_recording, output_folder, is_lfp=is_lfp, tag="Main"
-    )
-    return data_processes_main + data_processes_combined
-
-
-def copy_ancillary_files(session_folder: Path, results_folder: Path) -> None:
-    """
-    Copy ancillary files from input_dir to output_dir
-
-    Parameters
-    ----------
-    session_folder: Path
-        Path to folder with metadata files
-    results_folder: Path
-        Path to where to write output data description file
-    """
-    ancillary_files = [
-        "procedures.json",
-        "subject.json",
-        "session.json",
-        "rig.json",
-    ]
-    for file in ancillary_files:
-        try:
-            shutil.copy(
-                f"{session_folder.as_posix()}/{file}",
-                f"{results_folder.as_posix()}/{file}",
-            )
-        except FileNotFoundError:
-            raise FileNotFoundError(
-                f"Could not find {file} in {session_folder}. "
-                "Ensure the file exists in the input directory."
-            )
-
-
-def create_derived_data_description(
-    session_folder: Path, results_folder: Path
-) -> None:
-    """
-    Create a derived data description
-
-    Parameters
-    ----------
-    session_folder: Path
-        Path to folder with metadata files
-    results_folder: Path
-        Path to where to write output data description file
-    """
-    data_description_fp = session_folder / "data_description.json"
-    with open(data_description_fp) as j:
-        data_description = json.load(j)
-    data_description_upgrader = DataDescriptionUpgrade(
-        old_data_description_dict=data_description
-    )
-    data_upgrader = data_description_upgrader.upgrade()
-    derived_data_description = DerivedDataDescription.from_data_description(
-        data_description=data_upgrader, process_name="IBL-converted"
-    )
-    derived_data_description.write_standard_file(
-        output_directory=results_folder
+    save_rms_and_lfp_spectrum(
+        main_recording, output_folder, target_freq_resolution_psd,
+        is_lfp=is_lfp, tag="Main",
     )
 
 
@@ -1140,7 +1033,8 @@ def extract_continuous(
     lfp_freq_min: float = 1,
     lfp_freq_max: float = 300,
     num_parallel_jobs: int = 10,
-    decimation_factor: int = 24,
+    target_sample_rate: float = 1250,
+    target_freq_resolution_psd: float = 0.5
 ):
     """
     Extract features from raw data
@@ -1183,8 +1077,12 @@ def extract_continuous(
     num_parallel_jobs: int, default = 10
         Number of parallel jobs to use
 
-    decimation_factor: int, default = 24
-        Decimation factor for downsampling
+    target_sample_rate : float, default = 1250
+        The target sample rate in Hz to 
+        downsample to (only used for 2.0 probes).
+    
+    target_freq_resolution_psd: float, default = 0.5
+        Target frequency resolution for PSD in Hz
     """
 
     session_folder = Path(str(sorting_folder).split("_sorted")[0])
@@ -1234,16 +1132,16 @@ def extract_continuous(
 
         # combine this with mappings above for
         # seperate surface finding asset
-        main_recordings_ap = _merge_dicts(
+        main_recordings_ap = _merge_main_and_surface_recording_dicts(
             main_recordings_ap, main_recordings_separate_ap
         )
-        surface_recordings_ap = _merge_dicts(
+        surface_recordings_ap = _merge_main_and_surface_recording_dicts(
             surface_recordings_ap, surface_recordings_separate_ap
         )
-        main_recordings_lfp = _merge_dicts(
+        main_recordings_lfp = _merge_main_and_surface_recording_dicts(
             main_recordings_lfp, main_recordings_separate_lfp
         )
-        surface_recordings_lfp = _merge_dicts(
+        surface_recordings_lfp = _merge_main_and_surface_recording_dicts(
             surface_recordings_lfp, surface_separate_recordings_lfp
         )
 
@@ -1251,8 +1149,6 @@ def extract_continuous(
         "Looking at AP recordings, "
         "will concatenate if surface recordings are present"
     )
-    data_processes_ap = []
-    data_processes_lfp = []
     for stream_name_ap in main_recordings_ap:
         # if multiple segments for a recording, get largest per recording
         main_recordings_ap_largest_segment = get_largest_segment_recordings(
@@ -1277,14 +1173,12 @@ def extract_continuous(
             main_recordings_ap_largest_segment
         )
         logging.info("Processing raw AP data - Computing rms")
-        data_processes_ap.extend(
-            process_raw_data(
-                main_recording_ap,
-                recording_concatenated_ap,
-                stream_name_ap,
-                results_folder,
-                is_lfp=False,
-            )
+        process_raw_data(
+            main_recording_ap,
+            recording_concatenated_ap,
+            stream_name_ap,
+            results_folder,
+            is_lfp=False,
         )
 
     logging.info(
@@ -1317,22 +1211,11 @@ def extract_continuous(
         logging.info(
             "Processing raw LFP data - Computing rms and LFP Spectrum"
         )
-        data_processes_lfp.extend(
-            process_raw_data(
-                main_recording_lfp,
-                recording_concatenated_lfp,
-                stream_name_lfp,
-                results_folder,
-                is_lfp=True,
-            )
+        process_raw_data(
+            main_recording_lfp,
+            recording_concatenated_lfp,
+            stream_name_lfp,
+            results_folder,
+            is_lfp=True,
         )
-
-    all_data_processes = data_processes_ap + data_processes_lfp
-    pipeline_process = PipelineProcess(
-        data_processes=all_data_processes,
-        processor_full_name="Ephys IBL Conversion",
-    )
-    processing = Processing(processing_pipeline=pipeline_process)
-    processing.write_standard_file(output_directory=Path(results_folder))
-    create_derived_data_description(session_folder, Path(results_folder))
-    copy_ancillary_files(session_folder, Path(results_folder))
+        
