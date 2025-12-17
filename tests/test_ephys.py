@@ -3,6 +3,7 @@
 import shutil
 import tempfile
 import unittest
+from collections import defaultdict
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -12,6 +13,7 @@ from spikeinterface.extractors import toy_example
 
 from aind_ephys_ibl_gui_conversion.ephys import (
     _stream_to_probe_name,
+    _merge_main_and_surface_recording_dicts,
     get_concatenated_recordings,
     get_largest_segment_recordings,
     get_main_recording_from_list,
@@ -20,6 +22,67 @@ from aind_ephys_ibl_gui_conversion.ephys import (
     process_raw_data,
     remove_overlapping_channels,
 )
+
+
+class TestMergeMainAndSurfaceRecordingDicts(unittest.TestCase):
+    """Tests for _merge_main_and_surface_recording_dicts."""
+
+    def test_overlapping_keys_are_concatenated(self):
+        """
+        Overlapping keys must have their list values concatenated.
+
+        This is the core behavior required when surface ephys recordings
+        are stored as a separate data asset.
+        """
+        d1 = defaultdict(list, {"probeA": [1, 2]})
+        d2 = defaultdict(list, {"probeA": [3]})
+
+        merged = _merge_main_and_surface_recording_dicts(d1, d2)
+
+        self.assertEqual(merged["probeA"], [1, 2, 3])
+
+    def test_non_overlapping_keys_are_preserved(self):
+        """
+        Non-overlapping keys should be carried through unchanged.
+
+        Keys that only appear in one input dict must still be present
+        in the merged result.
+        """
+        d1 = defaultdict(list, {"probeA": [1]})
+        d2 = defaultdict(list, {"probeB": [2]})
+
+        merged = _merge_main_and_surface_recording_dicts(d1, d2)
+
+        self.assertEqual(merged["probeA"], [1])
+        self.assertEqual(merged["probeB"], [2])
+
+    def test_differs_from_dict_union_behavior(self):
+        """
+        The union operator overwrites values for overlapping keys,
+        whereas this function must concatenate them.
+        """
+        d1 = defaultdict(list, {"probeA": [1, 2]})
+        d2 = defaultdict(list, {"probeA": [3]})
+
+        merged = _merge_main_and_surface_recording_dicts(d1, d2)
+        union = d1 | d2
+
+        self.assertEqual(merged["probeA"], [1, 2, 3])
+        self.assertEqual(union["probeA"], [3])
+
+    def test_default_factory_is_preserved(self):
+        """
+        The merged defaultdict should preserve the default_factory.
+
+        This ensures missing keys still produce empty lists and that
+        defaultdict semantics are not lost during the merge.
+        """
+        d1 = defaultdict(list)
+        d2 = defaultdict(list)
+
+        merged = _merge_main_and_surface_recording_dicts(d1, d2)
+
+        self.assertIs(merged.default_factory, list)
 
 
 class TestStreamToProbeNameFunction(unittest.TestCase):
