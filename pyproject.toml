@@ -24,7 +24,7 @@ dependencies = [
     "spikeinterface[full]>=0.103.0",
     "tqdm>=4.66.1",
     "wavpack-numcodecs",
-    "numpy==2.0.1",
+    "numpy",
 ]
 
 [project.optional-dependencies]
