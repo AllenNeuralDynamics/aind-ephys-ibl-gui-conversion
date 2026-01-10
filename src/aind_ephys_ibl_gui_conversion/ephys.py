@@ -647,10 +647,8 @@ def get_stream_mappings(
     freq_max : float, optional
         Upper cutoff frequency (Hz) for LFP bandpass filtering.
         Defaults to 300 Hz.
-    decimation_factor : int, optional
-        Downsampling factor for LFP streams
-        (used only for Neuropixels 2.0 probes).
-        Defaults to 24.
+    target_sample_rate : float
+        The target sample rate to downsample to (only used for 2.0 probes).
 
     Returns
     -------
