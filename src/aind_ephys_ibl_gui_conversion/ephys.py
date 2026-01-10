@@ -1180,7 +1180,7 @@ def process_raw_data(
         )
 
         save_lfp_correlation(
-            recording_combined,
+            main_recording,
             output_folder,
             lfp_correlation_min_secs,
             lfp_correlation_num_bins,
@@ -1327,6 +1327,7 @@ def extract_continuous(
 
     logging.info(
         "Looking at AP recordings, "
+        f"{tuple(main_recordings_ap.keys())}"
         "will concatenate if surface recordings are present"
     )
     for stream_name_ap in main_recordings_ap:
@@ -1367,6 +1368,7 @@ def extract_continuous(
 
     logging.info(
         "Looking at LFP recordings "
+        f"{tuple(main_recordings_lfp.keys())}"
         "will concatenate if surface recordings are present"
     )
     for stream_name_lfp in main_recordings_lfp:
