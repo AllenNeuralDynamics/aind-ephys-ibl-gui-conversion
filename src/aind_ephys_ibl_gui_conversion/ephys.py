@@ -954,6 +954,106 @@ def get_main_recording_from_list(
         )
     return max(recordings, key=lambda r: r.get_num_samples())
 
+def save_lfp_correlation(
+    recording: si.BaseRecording,
+    output_folder: Path,
+    lfp_correlation_min_secs: int,
+    lfp_correlation_num_bins: int,
+    tag: Union[str, None] = None,
+):
+    """
+    Saves LFP correlation arrays for frequency bands
+    to the specfied output folder.
+
+    Correlation is done for delta, theta, alpha, beta,
+    and gamma frequency bands.
+
+    Runs decimation and common median referencing before
+    as preprocessing step
+
+    Parameters
+    ----------
+    recording: si.BaseRecording
+        The recording to run correlation on
+
+    output_folder: Path
+        The output folder to save outputs to
+
+    lfp_correlation_min_secs : int
+        Duration (seconds) of data used for LFP correlation.
+
+    lfp_correlation_num_bins : int
+        Number of bins used to compute LFP correlation.
+
+    tag : str or None, optional, default=None
+        An optional tag used to distinguish different outputs.
+        If provided, this string will be included
+        in the filenames for the saved metrics.
+    """
+    # TODO: Should this be done regardless?
+    logging.info(
+        "Applying common median referencing"
+    )
+    recording = spre.common_reference(
+        recording, reference="global", operator="median"
+    )
+    bands = {
+        "delta": [0.5, 4],
+        "theta": [4, 12],
+        "alpha": [12, 30],
+        "beta": [30, 100],
+        "gamma": [100, 300],
+    }
+
+    band_corrs = {band: [] for band in bands}
+    bandpass_filtered_recordings = {}
+    for band, (low_f, high_f) in bands.items():
+        bandpass_filtered_recordings[(band, (low_f, high_f))] = (
+            spre.bandpass_filter(recording, freq_min=low_f, freq_max=high_f)
+        )
+
+    max_time_window = min(
+        lfp_correlation_min_secs, recording.get_duration()
+    )
+    time_frames = np.linspace(
+        0, max_time_window, lfp_correlation_num_bins + 1
+    )
+    time_frames_rec = (
+        time_frames * recording.get_sampling_frequency()
+    ).astype(int)
+
+    logging.info(
+        f"Found list of frames to compute correlation {time_frames_rec}"
+    )
+    # calculate lfp correlation
+    for index in range(len(time_frames_rec) - 1):
+        for band, (low_f, high_f) in bands.items():
+            # bandpass
+            D_band = bandpass_filtered_recordings[(band, (low_f, high_f))]
+            # correlation across channels
+            corr_matrix = np.corrcoef(
+                D_band.get_traces(
+                    start_frame=time_frames_rec[index],
+                    end_frame=time_frames_rec[index + 1],
+                ).T
+            )
+            logging.info(
+                f"Processing LFP correlation for band {band}"
+                f"across frames {time_frames_rec[index]} "
+                f"to {time_frames_rec[index + 1]}"
+            )
+            band_corrs[band].append(corr_matrix)
+
+    # average across windows
+    for band in band_corrs:
+        band_corrs[band] = np.nanmean(np.stack(band_corrs[band]), axis=0)
+
+    if tag is None:
+        for band, corr in band_corrs.items():
+            np.save(output_folder / f"{band}_mean_corr.npy", corr)
+    else:
+        for band, corr in band_corrs.items():
+            np.save(output_folder / f"{band}_{tag}_mean_corr.npy", corr)
 
 def process_raw_data(
     main_recording: si.BaseRecording,
@@ -963,6 +1063,8 @@ def process_raw_data(
     is_lfp: bool,
     target_freq_resolution_psd: float,
     chunk_duration: float,
+    lfp_correlation_min_secs: int,
+    lfp_correlation_num_bins: int,
 ):
     """
     Processes raw data for a given stream by computing RMS and (if applicable)
@@ -999,6 +1101,12 @@ def process_raw_data(
         lazy loading and processingof continuous data. 
         Longer chunks improve stability for
         low-frequency (LFP) filtering and spectral estimates.
+    
+    lfp_correlation_min_secs : int
+        Duration (seconds) of data used for LFP correlation.
+
+    lfp_correlation_num_bins : int
+        Number of bins used to compute LFP correlation.
 
     """
     probe_name = _stream_to_probe_name(stream_name)
@@ -1019,6 +1127,20 @@ def process_raw_data(
             chunk_duration,
             is_lfp=is_lfp,
         )
+
+        if is_lfp:
+            logging.info(
+                "Running LFP correlation band generation "
+                f"on concatenated recording for stream {stream_name}"
+            )
+
+            save_lfp_correlation(
+                recording_combined,
+                output_folder,
+                lfp_correlation_min_secs,
+                lfp_correlation_num_bins,
+            )
+
 
     if recording_combined is not None:
         # need appended channel locations
@@ -1045,6 +1167,20 @@ def process_raw_data(
         tag="Main",
     )
 
+    if is_lfp:
+        logging.info(
+            "Running LFP correlation band generation "
+            f"on main recording for stream {stream_name}"
+        )
+
+        save_lfp_correlation(
+            recording_combined,
+            output_folder,
+            lfp_correlation_min_secs,
+            lfp_correlation_num_bins,
+            tag="Main"
+        )
+
 
 def extract_continuous(
     sorting_folder: Path,
@@ -1057,6 +1193,9 @@ def extract_continuous(
     target_sample_rate: float = 1250,
     target_freq_resolution_psd: float = 0.5,
     chunk_duration: float = 15.0,
+    lfp_correlation_min_secs: int = 600,
+    lfp_correlation_num_bins: int = 5,
+
 ):
     """
     Extract features from raw data
@@ -1110,6 +1249,12 @@ def extract_continuous(
         lazy loading and processingof continuous data. 
         Longer chunks improve stability for
         low-frequency (LFP) filtering and spectral estimates.
+    
+    lfp_correlation_min_secs : int
+        Duration (seconds) of data used for LFP correlation.
+
+    lfp_correlation_num_bins : int
+        Number of bins used to compute LFP correlation.
     """
 
     session_folder = Path(str(sorting_folder).split("_sorted")[0])
@@ -1210,7 +1355,9 @@ def extract_continuous(
             results_folder,
             is_lfp=False,
             target_freq_resolution_psd=target_freq_resolution_psd,
-            chunk_duration=chunk_duration
+            chunk_duration=chunk_duration,
+            lfp_correlation_min_secs=lfp_correlation_min_secs,
+            lfp_correlation_num_bins=lfp_correlation_num_bins
         )
 
     logging.info(
@@ -1250,5 +1397,7 @@ def extract_continuous(
             results_folder,
             is_lfp=True,
             target_freq_resolution_psd=target_freq_resolution_psd,
-            chunk_duration=chunk_duration
+            chunk_duration=chunk_duration,
+            lfp_correlation_min_secs=lfp_correlation_min_secs,
+            lfp_correlation_num_bins=lfp_correlation_num_bins
         )
