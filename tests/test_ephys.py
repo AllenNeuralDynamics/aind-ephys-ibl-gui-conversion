@@ -314,6 +314,7 @@ class TestExtractContinuous(unittest.TestCase):
             main_recording=self.rec_ap,
             recording_combined=None,
             target_freq_resolution_psd=0.5,
+            chunk_duration=3,
             stream_name="Record Node 104#Neuropix-PXI-100.ProbeA-AP",
             results_folder=self.tmpdir,
             is_lfp=False,

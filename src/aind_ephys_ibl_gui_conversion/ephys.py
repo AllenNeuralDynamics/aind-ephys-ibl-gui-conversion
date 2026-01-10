@@ -730,6 +730,7 @@ def save_rms_and_lfp_spectrum(
     recording: si.BaseRecording,
     output_folder: Path,
     target_freq_resolution_psd: float,
+    chunk_duration: float,
     n_jobs: int = 10,
     is_lfp: bool = False,
     tag: Union[str, None] = None,
@@ -747,6 +748,12 @@ def save_rms_and_lfp_spectrum(
 
     target_freq_resolution_psd: float
         Target frequency resolution for PSD in Hz
+    
+    chunk_duration : float
+        Chunk length (in seconds) used for 
+        lazy loading and processingof continuous data. 
+        Longer chunks improve stability for
+        low-frequency (LFP) filtering and spectral estimates.
 
     n_jobs: int, default = 10
         The number of jobs to parallelize rms
@@ -762,7 +769,11 @@ def save_rms_and_lfp_spectrum(
     """
     logging.info("Computing rms")
     start_time_rms = datetime.now()
-    rms, rms_times = compute_rms(recording, n_jobs=n_jobs)
+    rms, rms_times = compute_rms(
+        recording, 
+        chunk_duration=chunk_duration,
+        n_jobs=n_jobs
+    )
     end_time_rms = datetime.now()
     elapsed_time_rms = end_time_rms - start_time_rms
     logging.info(
@@ -791,7 +802,7 @@ def save_rms_and_lfp_spectrum(
         lfp_sample_data = get_random_data_chunks(
             recording,
             num_chunks_per_segment=100,
-            chunk_duration="1s",
+            chunk_duration=chunk_duration,
             concatenated=True,
         )
         fs = recording.sampling_frequency
@@ -951,6 +962,7 @@ def process_raw_data(
     results_folder: str,
     is_lfp: bool,
     target_freq_resolution_psd: float,
+    chunk_duration: float,
 ):
     """
     Processes raw data for a given stream by computing RMS and (if applicable)
@@ -981,6 +993,12 @@ def process_raw_data(
 
     target_freq_resolution_psd: float
         Target frequency resolution for PSD in Hz
+    
+    chunk_duration : float
+        Chunk length (in seconds) used for 
+        lazy loading and processingof continuous data. 
+        Longer chunks improve stability for
+        low-frequency (LFP) filtering and spectral estimates.
 
     """
     probe_name = _stream_to_probe_name(stream_name)
@@ -998,6 +1016,7 @@ def process_raw_data(
             recording_combined,
             output_folder,
             target_freq_resolution_psd,
+            chunk_duration,
             is_lfp=is_lfp,
         )
 
@@ -1021,6 +1040,7 @@ def process_raw_data(
         main_recording,
         output_folder,
         target_freq_resolution_psd,
+        chunk_duration,
         is_lfp=is_lfp,
         tag="Main",
     )
@@ -1036,6 +1056,7 @@ def extract_continuous(
     num_parallel_jobs: int = 10,
     target_sample_rate: float = 1250,
     target_freq_resolution_psd: float = 0.5,
+    chunk_duration: float = 15.0,
 ):
     """
     Extract features from raw data
@@ -1083,6 +1104,12 @@ def extract_continuous(
 
     target_freq_resolution_psd: float, default = 0.5
         Target frequency resolution for PSD in Hz
+    
+    chunk_duration : float, default=15.0
+        Chunk length (in seconds) used for 
+        lazy loading and processingof continuous data. 
+        Longer chunks improve stability for
+        low-frequency (LFP) filtering and spectral estimates.
     """
 
     session_folder = Path(str(sorting_folder).split("_sorted")[0])
@@ -1183,6 +1210,7 @@ def extract_continuous(
             results_folder,
             is_lfp=False,
             target_freq_resolution_psd=target_freq_resolution_psd,
+            chunk_duration=chunk_duration
         )
 
     logging.info(
@@ -1222,4 +1250,5 @@ def extract_continuous(
             results_folder,
             is_lfp=True,
             target_freq_resolution_psd=target_freq_resolution_psd,
+            chunk_duration=chunk_duration
         )
