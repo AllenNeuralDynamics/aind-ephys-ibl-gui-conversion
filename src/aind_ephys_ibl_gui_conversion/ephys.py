@@ -748,10 +748,10 @@ def save_rms_and_lfp_spectrum(
 
     target_freq_resolution_psd: float
         Target frequency resolution for PSD in Hz
-    
+
     chunk_duration : float
-        Chunk length (in seconds) used for 
-        lazy loading and processingof continuous data. 
+        Chunk length (in seconds) used for
+        lazy loading and processingof continuous data.
         Longer chunks improve stability for
         low-frequency (LFP) filtering and spectral estimates.
 
@@ -770,9 +770,7 @@ def save_rms_and_lfp_spectrum(
     logging.info("Computing rms")
     start_time_rms = datetime.now()
     rms, rms_times = compute_rms(
-        recording, 
-        chunk_duration=chunk_duration,
-        n_jobs=n_jobs
+        recording, chunk_duration=chunk_duration, n_jobs=n_jobs
     )
     end_time_rms = datetime.now()
     elapsed_time_rms = end_time_rms - start_time_rms
@@ -954,6 +952,7 @@ def get_main_recording_from_list(
         )
     return max(recordings, key=lambda r: r.get_num_samples())
 
+
 def save_lfp_correlation(
     recording: si.BaseRecording,
     output_folder: Path,
@@ -991,9 +990,7 @@ def save_lfp_correlation(
         in the filenames for the saved metrics.
     """
     # TODO: Should this be done regardless?
-    logging.info(
-        "Applying common median referencing"
-    )
+    logging.info("Applying common median referencing")
     recording = spre.common_reference(
         recording, reference="global", operator="median"
     )
@@ -1012,12 +1009,8 @@ def save_lfp_correlation(
             spre.bandpass_filter(recording, freq_min=low_f, freq_max=high_f)
         )
 
-    max_time_window = min(
-        lfp_correlation_min_secs, recording.get_duration()
-    )
-    time_frames = np.linspace(
-        0, max_time_window, lfp_correlation_num_bins + 1
-    )
+    max_time_window = min(lfp_correlation_min_secs, recording.get_duration())
+    time_frames = np.linspace(0, max_time_window, lfp_correlation_num_bins + 1)
     time_frames_rec = (
         time_frames * recording.get_sampling_frequency()
     ).astype(int)
@@ -1054,6 +1047,7 @@ def save_lfp_correlation(
     else:
         for band, corr in band_corrs.items():
             np.save(output_folder / f"{band}_{tag}_mean_corr.npy", corr)
+
 
 def process_raw_data(
     main_recording: si.BaseRecording,
@@ -1095,13 +1089,13 @@ def process_raw_data(
 
     target_freq_resolution_psd: float
         Target frequency resolution for PSD in Hz
-    
+
     chunk_duration : float
-        Chunk length (in seconds) used for 
-        lazy loading and processingof continuous data. 
+        Chunk length (in seconds) used for
+        lazy loading and processingof continuous data.
         Longer chunks improve stability for
         low-frequency (LFP) filtering and spectral estimates.
-    
+
     lfp_correlation_min_secs : int
         Duration (seconds) of data used for LFP correlation.
 
@@ -1141,7 +1135,6 @@ def process_raw_data(
                 lfp_correlation_num_bins,
             )
 
-
     if recording_combined is not None:
         # need appended channel locations
         # so app can show surface recording locations also
@@ -1178,7 +1171,7 @@ def process_raw_data(
             output_folder,
             lfp_correlation_min_secs,
             lfp_correlation_num_bins,
-            tag="Main"
+            tag="Main",
         )
 
 
@@ -1195,7 +1188,6 @@ def extract_continuous(
     chunk_duration: float = 15.0,
     lfp_correlation_min_secs: int = 600,
     lfp_correlation_num_bins: int = 5,
-
 ):
     """
     Extract features from raw data
@@ -1243,13 +1235,13 @@ def extract_continuous(
 
     target_freq_resolution_psd: float, default = 0.5
         Target frequency resolution for PSD in Hz
-    
+
     chunk_duration : float, default=15.0
-        Chunk length (in seconds) used for 
-        lazy loading and processingof continuous data. 
+        Chunk length (in seconds) used for
+        lazy loading and processingof continuous data.
         Longer chunks improve stability for
         low-frequency (LFP) filtering and spectral estimates.
-    
+
     lfp_correlation_min_secs : int
         Duration (seconds) of data used for LFP correlation.
 
@@ -1357,7 +1349,7 @@ def extract_continuous(
             target_freq_resolution_psd=target_freq_resolution_psd,
             chunk_duration=chunk_duration,
             lfp_correlation_min_secs=lfp_correlation_min_secs,
-            lfp_correlation_num_bins=lfp_correlation_num_bins
+            lfp_correlation_num_bins=lfp_correlation_num_bins,
         )
 
     logging.info(
@@ -1399,5 +1391,5 @@ def extract_continuous(
             target_freq_resolution_psd=target_freq_resolution_psd,
             chunk_duration=chunk_duration,
             lfp_correlation_min_secs=lfp_correlation_min_secs,
-            lfp_correlation_num_bins=lfp_correlation_num_bins
+            lfp_correlation_num_bins=lfp_correlation_num_bins,
         )
