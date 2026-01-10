@@ -23,12 +23,12 @@ STREAM_PROBE_REGEX = re.compile(r"^Record Node \d+#[^.]+\.(.+?)(-AP|-LFP)?$")
 T = TypeVar("T")
 
 
-def _merge_main_and_surface_recording_dicts(
+def _merge_seperate_asset_recording_dicts(
     d1: DefaultDict[str, list[T]],
     d2: DefaultDict[str, list[T]],
 ) -> DefaultDict[str, list[T]]:
     """
-    Merge main and surface recordings when surface ephys
+    Merge recordings when surface ephys
     is recorded as a separate data asset.
 
     Keys are expected to overlap; values are concatenated.
@@ -1135,16 +1135,16 @@ def extract_continuous(
 
         # combine this with mappings above for
         # seperate surface finding asset
-        main_recordings_ap = _merge_main_and_surface_recording_dicts(
+        main_recordings_ap = _merge_seperate_asset_recording_dicts(
             main_recordings_ap, main_recordings_separate_ap
         )
-        surface_recordings_ap = _merge_main_and_surface_recording_dicts(
+        surface_recordings_ap = _merge_seperate_asset_recording_dicts(
             surface_recordings_ap, surface_recordings_separate_ap
         )
-        main_recordings_lfp = _merge_main_and_surface_recording_dicts(
+        main_recordings_lfp = _merge_seperate_asset_recording_dicts(
             main_recordings_lfp, main_recordings_separate_lfp
         )
-        surface_recordings_lfp = _merge_main_and_surface_recording_dicts(
+        surface_recordings_lfp = _merge_seperate_asset_recording_dicts(
             surface_recordings_lfp, surface_separate_recordings_lfp
         )
 
