@@ -767,7 +767,10 @@ def save_rms_and_lfp_spectrum(
         in the filenames for the saved metrics.
 
     """
-    logging.info("Computing rms")
+    logging.info(
+        f"Computing rms with chunk duration {chunk_duration}s "
+        f"and using number of parallel jobs {n_jobs}"
+    )
     start_time_rms = datetime.now()
     rms, rms_times = compute_rms(
         recording, chunk_duration=chunk_duration, n_jobs=n_jobs
