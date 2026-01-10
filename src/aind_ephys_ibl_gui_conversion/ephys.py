@@ -990,6 +990,9 @@ def save_lfp_correlation(
         in the filenames for the saved metrics.
     """
     # TODO: Should this be done regardless?
+    # Adapted from code from Sue:
+    # https://github.com/AllenNeuralDynamics/aind-beh-ephys-analysis/blob/main/code/beh_ephys_analysis/ephys_spatial_feature.py#L583
+    start_time_lfp_corr = datetime.now()
     logging.info("Applying common median referencing")
     recording = spre.common_reference(
         recording, reference="global", operator="median"
@@ -1047,6 +1050,13 @@ def save_lfp_correlation(
     else:
         for band, corr in band_corrs.items():
             np.save(output_folder / f"{band}_{tag}_mean_corr.npy", corr)
+
+    end_time_lfp_corr = datetime.now()
+    elapsed_time_lfp_corr = end_time_lfp_corr - start_time_lfp_corr
+    logging.info(
+        "Elapsed time for lfp correlation:"
+        f"{elapsed_time_lfp_corr.total_seconds():.6f} seconds"
+    )
 
 
 def process_raw_data(
