@@ -1047,8 +1047,11 @@ def save_lfp_correlation(
         band_corrs[band] = np.nanmean(np.stack(band_corrs[band]), axis=0)
 
     # gui requires this folder
-    output_folder.mkdir("band_corr", exist_ok=True)
     folder_to_save = output_folder / "band_corr"
+    folder_to_save.mkdir(exist_ok=True)
+    logging.info(
+        f"Saving LFP correlation to folder {folder_to_save}"
+    )
     if tag is None:
         for band, corr in band_corrs.items():
             np.save(folder_to_save / f"{band}_mean_corr.npy", corr)
