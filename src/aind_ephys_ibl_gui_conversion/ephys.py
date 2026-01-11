@@ -531,7 +531,7 @@ def process_lfp_stream(
             f"with freq min {freq_min} "
             f"and freq max {freq_max}"
         )
-        return spre.bandpass_filter(
+        recording_lfp = spre.bandpass_filter(
             recording, freq_min=freq_min, freq_max=freq_max
         )
     else:  # 2.0 probe, decimate to 1250
@@ -550,9 +550,16 @@ def process_lfp_stream(
             f"Applying decimation with factor {decimation_factor} "
             f"to target sample rate {target_sample_rate}"
         )
-        return spre.decimate(
+        recording_lfp = spre.decimate(
             recording_lfp_bandpass, decimation_factor=decimation_factor
         )
+    
+    logging.info(
+        "Applying cmr to lfp recording"
+    )
+    return spre.common_reference(
+        recording_lfp, reference="global", operator="median"
+    )
 
 
 def get_neuropixel_lfp_stream(
@@ -990,14 +997,10 @@ def save_lfp_correlation(
         If provided, this string will be included
         in the filenames for the saved metrics.
     """
-    # TODO: Should this be done regardless?
     # Adapted from code from Sue:
     # https://github.com/AllenNeuralDynamics/aind-beh-ephys-analysis/blob/main/code/beh_ephys_analysis/ephys_spatial_feature.py#L583
     start_time_lfp_corr = datetime.now()
-    logging.info("Applying common median referencing")
-    recording = spre.common_reference(
-        recording, reference="global", operator="median"
-    )
+
     bands = {
         "delta": [0.5, 4],
         "theta": [4, 12],
@@ -1044,13 +1047,16 @@ def save_lfp_correlation(
     # average across windows
     for band in band_corrs:
         band_corrs[band] = np.nanmean(np.stack(band_corrs[band]), axis=0)
-
+    
+    # gui requires this folder 
+    output_folder.mkdir("band_corr", exist_ok=True)
+    folder_to_save = output_folder / "band_corr"
     if tag is None:
         for band, corr in band_corrs.items():
-            np.save(output_folder / f"{band}_mean_corr.npy", corr)
+            np.save(folder_to_save / f"{band}_mean_corr.npy", corr)
     else:
         for band, corr in band_corrs.items():
-            np.save(output_folder / f"{band}_{tag}_mean_corr.npy", corr)
+            np.save(folder_to_save / f"{band}_{tag}_mean_corr.npy", corr)
 
     end_time_lfp_corr = datetime.now()
     elapsed_time_lfp_corr = end_time_lfp_corr - start_time_lfp_corr
