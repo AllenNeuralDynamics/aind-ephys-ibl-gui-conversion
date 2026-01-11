@@ -553,10 +553,8 @@ def process_lfp_stream(
         recording_lfp = spre.decimate(
             recording_lfp_bandpass, decimation_factor=decimation_factor
         )
-    
-    logging.info(
-        "Applying cmr to lfp recording"
-    )
+
+    logging.info("Applying cmr to lfp recording")
     return spre.common_reference(
         recording_lfp, reference="global", operator="median"
     )
@@ -1047,8 +1045,8 @@ def save_lfp_correlation(
     # average across windows
     for band in band_corrs:
         band_corrs[band] = np.nanmean(np.stack(band_corrs[band]), axis=0)
-    
-    # gui requires this folder 
+
+    # gui requires this folder
     output_folder.mkdir("band_corr", exist_ok=True)
     folder_to_save = output_folder / "band_corr"
     if tag is None:
