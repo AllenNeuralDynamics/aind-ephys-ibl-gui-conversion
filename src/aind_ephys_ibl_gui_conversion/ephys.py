@@ -1010,8 +1010,11 @@ def save_lfp_correlation(
     band_corrs = {band: [] for band in bands}
     bandpass_filtered_recordings = {}
     for band, (low_f, high_f) in bands.items():
+        margin_ms = (1 / low_f) * 3 * 1000
         bandpass_filtered_recordings[(band, (low_f, high_f))] = (
-            spre.bandpass_filter(recording, freq_min=low_f, freq_max=high_f)
+            spre.bandpass_filter(
+                recording, freq_min=low_f, freq_max=high_f, margin_ms=margin_ms
+            )
         )
 
     max_time_window = min(lfp_correlation_min_secs, recording.get_duration())
@@ -1049,9 +1052,7 @@ def save_lfp_correlation(
     # gui requires this folder
     folder_to_save = output_folder / "band_corr"
     folder_to_save.mkdir(exist_ok=True)
-    logging.info(
-        f"Saving LFP correlation to folder {folder_to_save}"
-    )
+    logging.info(f"Saving LFP correlation to folder {folder_to_save}")
     if tag is None:
         for band, corr in band_corrs.items():
             np.save(folder_to_save / f"{band}_mean_corr.npy", corr)
@@ -1205,7 +1206,7 @@ def extract_continuous(
     target_freq_resolution_psd: float = 0.5,
     chunk_duration: float = 15.0,
     lfp_correlation_min_secs: int = 600,
-    lfp_correlation_num_bins: int = 5,
+    lfp_correlation_num_bins: int = 10,
 ):
     """
     Extract features from raw data
@@ -1260,10 +1261,10 @@ def extract_continuous(
         Longer chunks improve stability for
         low-frequency (LFP) filtering and spectral estimates.
 
-    lfp_correlation_min_secs : int
+    lfp_correlation_min_secs : int, default = 600
         Duration (seconds) of data used for LFP correlation.
 
-    lfp_correlation_num_bins : int
+    lfp_correlation_num_bins : int, default = 10
         Number of bins used to compute LFP correlation.
     """
 
