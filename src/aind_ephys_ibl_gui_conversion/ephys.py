@@ -25,6 +25,13 @@ from scipy.signal import butter, sosfiltfilt, sosfilt, decimate
 STREAM_PROBE_REGEX = re.compile(r"^Record Node \d+#[^.]+\.(.+?)(-AP|-LFP)?$")
 T = TypeVar("T")
 
+def _maybe_decimate_for_rms(recording: si.BaseRecording, target_fs: float) -> si.BaseRecording:
+    fs = float(recording.sampling_frequency)
+    q = int(fs // target_fs)
+    if q >= 2:
+        logging.info(f"Decimating for RMS: fs={fs}Hz -> ~{fs/q:.1f}Hz (q={q})")
+        return spre.decimate(recording, decimation_factor=q)
+    return recording
 
 
 def _design_bandpass_sos(low_hz: float, high_hz: float, fs: float, order: int = 4):
@@ -932,9 +939,17 @@ def save_rms_and_lfp_spectrum(
         f"and using number of parallel jobs {n_jobs}"
     )
     start_time_rms = datetime.now()
-    rms, rms_times = compute_rms(
-        recording, chunk_duration=chunk_duration, n_jobs=n_jobs
-    )
+    # OLD VERSION
+    # rms, rms_times = compute_rms(
+    #     recording, chunk_duration=chunk_duration, n_jobs=n_jobs
+    # )
+
+    # Yoni/ChatGPT:
+    recording_for_rms = recording
+    if not is_lfp:
+        recording_for_rms = _maybe_decimate_for_rms(recording, target_fs=2000.0)
+    rms, rms_times = compute_rms(recording_for_rms, n_jobs=n_jobs)
+
     end_time_rms = datetime.now()
     elapsed_time_rms = end_time_rms - start_time_rms
     logging.info(
