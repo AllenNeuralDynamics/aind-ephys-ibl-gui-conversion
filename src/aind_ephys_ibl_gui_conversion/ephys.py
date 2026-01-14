@@ -814,20 +814,33 @@ def save_rms_and_lfp_spectrum(
         nperseg = int(fs / target_freq_resolution_psd)
         nperseg = 2 ** int(np.log2(nperseg))  # round to nearest power of 2
 
+        ### OLD VERSION
         # Preallocate PSD array
-        psd = np.zeros(
-            (nperseg // 2 + 1, lfp_sample_data.shape[1]), dtype=np.float32
+        # psd = np.zeros(
+        #     (nperseg // 2 + 1, lfp_sample_data.shape[1]), dtype=np.float32
+        # )
+
+        # for i_channel in range(lfp_sample_data.shape[1]):
+        #     freqs, Pxx = welch(
+        #         lfp_sample_data[:, i_channel],
+        #         fs=recording.sampling_frequency,
+        #         nperseg=nperseg,
+        #     )
+        #     psd[:, i_channel] = Pxx
+
+        # freqs = freqs.astype(np.float32)
+
+        ### Yoni/ChatGPT fix
+        freqs, Pxx = welch(
+            lfp_sample_data,
+            fs=float(recording.sampling_frequency),
+            nperseg=nperseg,
+            axis=0,              # time axis
         )
+        psd = Pxx.astype(np.float32, copy=False)
+        freqs = freqs.astype(np.float32, copy=False)
 
-        for i_channel in range(lfp_sample_data.shape[1]):
-            freqs, Pxx = welch(
-                lfp_sample_data[:, i_channel],
-                fs=recording.sampling_frequency,
-                nperseg=nperseg,
-            )
-            psd[:, i_channel] = Pxx
-
-        freqs = freqs.astype(np.float32)
+        
         end_time_lfp_spectrum = datetime.now()
         elapsed_time_lfp_spectrum = (
             end_time_lfp_spectrum - start_time_lfp_spectrum
