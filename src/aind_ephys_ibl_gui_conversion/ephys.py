@@ -25,13 +25,53 @@ from scipy.signal import butter, sosfiltfilt, sosfilt, decimate
 STREAM_PROBE_REGEX = re.compile(r"^Record Node \d+#[^.]+\.(.+?)(-AP|-LFP)?$")
 T = TypeVar("T")
 
-def _maybe_decimate_for_rms(recording: si.BaseRecording, target_fs: float) -> si.BaseRecording:
+def _get_aggregation_children(recording: si.BaseRecording) -> list[si.BaseRecording] | None:
+    for attr in ("recording_list", "_recording_list", "recordings", "_recordings"):
+        kids = getattr(recording, attr, None)
+        if kids is not None:
+            return list(kids)
+    return None
+
+
+def _maybe_decimate_aggregated_safe(
+    recording: si.BaseRecording,
+    target_fs: float,
+) -> si.BaseRecording:
+    """
+    If `recording` is a ChannelsAggregationRecording, ensure all child recordings have:
+      - identical length
+      - length divisible by decimation factor q
+    then aggregate and decimate.
+
+    This avoids shape mismatches inside ChannelsAggregationRecording.get_traces()
+    when downstream asks for chunked traces from the decimated wrapper.
+    """
     fs = float(recording.sampling_frequency)
-    q = int(fs // target_fs)
-    if q >= 2:
-        logging.info(f"Decimating for RMS: fs={fs}Hz -> ~{fs/q:.1f}Hz (q={q})")
+    q = int(fs // float(target_fs))
+    if q < 2:
+        return recording
+
+    is_agg = "ChannelsAggregationRecording" in type(recording).__name__
+    if not is_agg:
         return spre.decimate(recording, decimation_factor=q)
-    return recording
+
+    children = _get_aggregation_children(recording)
+    if not children:
+        # safest fallback: don't decimate
+        logging.warning("Could not access aggregation children; skipping RMS decimation.")
+        return recording
+
+    # make all children exactly the same length and divisible by q
+    min_samples = min(ch.get_num_samples() for ch in children)
+    min_samples = (min_samples // q) * q  # enforce divisibility
+    if min_samples <= 0:
+        return recording
+
+    children_sliced = [ch.frame_slice(start_frame=0, end_frame=min_samples) for ch in children]
+
+    # Re-aggregate, then decimate
+    rec_agg = si.aggregate_channels(children_sliced)
+    return spre.decimate(rec_agg, decimation_factor=q)
 
 
 def _design_bandpass_sos(low_hz: float, high_hz: float, fs: float, order: int = 4):
@@ -73,82 +113,6 @@ def _corrcoef_fast(X: np.ndarray, eps: float = 1e-8) -> np.ndarray:
         raise ValueError("Not enough samples to compute correlation.")
     C = (Xn.T @ Xn) / (T - 1)
     return C.astype(np.float32, copy=False)
-
-def _get_aggregation_children(recording: si.BaseRecording) -> list[si.BaseRecording] | None:
-    """
-    Best-effort access to child recordings in a ChannelsAggregationRecording.
-    SpikeInterface has changed attribute names across versions.
-    """
-    for attr in ("recording_list", "_recording_list", "recordings", "_recordings"):
-        kids = getattr(recording, attr, None)
-        if kids is not None:
-            return list(kids)
-    return None
-
-
-def compute_rms_safe(
-    recording: si.BaseRecording,
-    *,
-    n_jobs: int = 10,
-    decimate_target_fs: float | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Compute RMS safely. If recording is a ChannelsAggregationRecording and
-    decimation is requested, decimate EACH child first, then compute RMS on each,
-    then concatenate RMS across channels.
-
-    Returns
-    -------
-    rms : (n_timebins, n_channels) array
-    rms_times : (n_timebins,) array
-    """
-    # Only special-case when we both (a) have an aggregation and (b) want decimation
-    is_agg = "ChannelsAggregationRecording" in type(recording).__name__
-    if not is_agg or decimate_target_fs is None:
-        # Plain path (no decimation, or not aggregated)
-        return compute_rms(recording, n_jobs=n_jobs)
-
-    children = _get_aggregation_children(recording)
-    if not children:
-        # Fallback: safest is to skip decimation rather than crash
-        return compute_rms(recording, n_jobs=n_jobs)
-
-    # Force all children to a common length so time bins line up
-    # (use segment 0; your pipeline already selects largest segment earlier)
-    min_samples = min(ch.get_num_samples() for ch in children)
-
-    rms_list = []
-    times_ref = None
-
-    # Avoid oversubscription: split jobs across children
-    # (optional: tune this)
-    child_n_jobs = max(1, n_jobs // max(1, len(children)))
-
-    for ch in children:
-        ch2 = ch.frame_slice(start_frame=0, end_frame=min_samples)
-
-        fs = float(ch2.sampling_frequency)
-        q = int(fs // float(decimate_target_fs))
-        if q >= 2:
-            ch2 = spre.decimate(ch2, decimation_factor=q)
-
-        rms_ch, times_ch = compute_rms(ch2, n_jobs=child_n_jobs)
-
-        if times_ref is None:
-            times_ref = times_ch
-        else:
-            # If slightly different due to rounding, hard-align by trimming to min length
-            L = min(len(times_ref), len(times_ch))
-            times_ref = times_ref[:L]
-            rms_ch = rms_ch[:L]
-            # Also trim previously collected arrays if needed
-            rms_list = [r[:L] for r in rms_list]
-
-        rms_list.append(rms_ch)
-
-    rms = np.concatenate(rms_list, axis=1)
-    return rms, times_ref
-
 
 def compute_lfp_band_correlations_dropin(
     recording,
@@ -1020,8 +984,12 @@ def save_rms_and_lfp_spectrum(
     # )
 
     # Yoni/ChatGPT:
-    dec_target = 2000.0 if not is_lfp else None
-    rms, rms_times = compute_rms_safe(recording, n_jobs=n_jobs, decimate_target_fs=dec_target)
+    recording_for_rms = recording
+    if not is_lfp:
+        # AP RMS decimation (big speedup, still meaningful QC)
+        recording_for_rms = _maybe_decimate_aggregated_safe(recording, target_fs=2000.0)
+
+    rms, rms_times = compute_rms(recording_for_rms, n_jobs=n_jobs)
 
     end_time_rms = datetime.now()
     elapsed_time_rms = end_time_rms - start_time_rms
