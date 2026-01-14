@@ -18,11 +18,168 @@ from scipy.signal import welch
 from spikeinterface.core import get_random_data_chunks
 from spikeinterface.exporters import export_to_phy
 from spikeinterface.exporters.to_ibl import compute_rms
+from scipy.signal import butter, sosfiltfilt, sosfilt, decimate
+
+
 
 STREAM_PROBE_REGEX = re.compile(r"^Record Node \d+#[^.]+\.(.+?)(-AP|-LFP)?$")
 T = TypeVar("T")
 
 
+
+def _design_bandpass_sos(low_hz: float, high_hz: float, fs: float, order: int = 4):
+    """
+    Stable IIR bandpass in SOS form.
+    """
+    nyq = 0.5 * fs
+    low = max(low_hz / nyq, 1e-6)
+    high = min(high_hz / nyq, 0.999999)
+    if not (0 < low < high < 1):
+        raise ValueError(f"Invalid band [{low_hz}, {high_hz}] for fs={fs}")
+    return butter(order, [low, high], btype="bandpass", output="sos")
+
+
+def _safe_decimate(X: np.ndarray, q: int, *, zero_phase: bool = True) -> np.ndarray:
+    """
+    Downsample along axis=0 (time). Uses scipy.signal.decimate with IIR anti-alias.
+    """
+    if q <= 1:
+        return X
+    # decimate operates along axis=0 if we specify axis
+    return decimate(X, q=q, ftype="iir", zero_phase=zero_phase, axis=0)
+
+
+def _corrcoef_fast(X: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+    """
+    Compute channel-by-channel correlation matrix from X (T x C),
+    using BLAS-friendly operations. Returns (C x C), float32.
+    """
+    # demean
+    X = X - X.mean(axis=0, keepdims=True)
+    # normalize columns
+    denom = X.std(axis=0, ddof=1, keepdims=True)
+    denom = np.maximum(denom, eps)
+    Xn = X / denom
+    # correlation = (Xn^T Xn) / (T-1)
+    T = Xn.shape[0]
+    if T < 2:
+        raise ValueError("Not enough samples to compute correlation.")
+    C = (Xn.T @ Xn) / (T - 1)
+    return C.astype(np.float32, copy=False)
+
+
+def compute_lfp_band_correlations_dropin(
+    recording,
+    frame_windows: np.ndarray,
+    bands: dict,
+    *,
+    max_fs_by_band: dict | None = None,
+    bandpass_order: int = 4,
+    dtype: np.dtype = np.float32,
+    decimate_zero_phase: bool = True,
+    streaming_filter: bool = False,
+) -> dict:
+    """
+    Drop-in style: compute band correlations for multiple frame windows while
+    reading traces ONCE per window (not once per band).
+
+    Parameters
+    ----------
+    recording:
+        SpikeInterface recording (already LFP-appropriate and ideally already decimated
+        to ~1250 Hz upstream).
+    frame_windows:
+        Array of shape (N, 2) with [start_frame, end_frame) per window.
+        Example: np.array([[0, 38103],[38103,76206],...], dtype=int)
+    bands:
+        dict mapping band_name -> (low_hz, high_hz). Example:
+        {"delta": (1,4), "theta": (4,8), ...}
+    max_fs_by_band:
+        dict mapping band_name -> target_max_fs (Hz) used for correlation.
+        If None, reasonable defaults are used.
+        Downsampling happens AFTER bandpass.
+    bandpass_order:
+        Butterworth order (SOS).
+    dtype:
+        dtype for in-memory traces (float32 recommended).
+    decimate_zero_phase:
+        Use zero-phase decimation (slower, but no phase distortion).
+        For correlation magnitude, zero_phase=False is often fine and faster.
+    streaming_filter:
+        If True, uses sosfilt (causal) instead of sosfiltfilt (zero-phase).
+        Faster, but introduces phase distortion. For correlation *magnitude* it’s often OK.
+
+    Returns
+    -------
+    results:
+        Nested dict: results[band_name][window_index] = (C x C) correlation matrix
+    """
+    fs = float(recording.sampling_frequency)
+
+    if max_fs_by_band is None:
+        # pragmatic targets for correlation computation
+        # (keep comfortably above band high edge; correlation is not sensitive to precise fs)
+        max_fs_by_band = {
+            "delta": 200.0,
+            "theta": 250.0,
+            "alpha": 300.0,
+            "beta": 400.0,
+            "gamma": 800.0,  # adjust if your gamma band is high (e.g. 30-80)
+        }
+
+    # Pre-design filters once per band
+    band_sos = {}
+    decim_q = {}
+    fs_after = {}
+    for name, (f_lo, f_hi) in bands.items():
+        band_sos[name] = _design_bandpass_sos(f_lo, f_hi, fs, order=bandpass_order)
+
+        target_fs = float(max_fs_by_band.get(name, fs))
+        # choose integer decimation to bring fs down near (<=) target_fs
+        q = int(np.floor(fs / target_fs)) if target_fs > 0 else 1
+        q = max(q, 1)
+        decim_q[name] = q
+        fs_after[name] = fs / q
+
+        # sanity: ensure post-decimation Nyquist still above high cutoff with margin
+        if 0.5 * fs_after[name] < 1.2 * f_hi:
+            # reduce decimation if too aggressive
+            # (1.2 margin is arbitrary; keep some breathing room)
+            q2 = int(np.floor(fs / (2.5 * f_hi)))  # ensures nyq ~>=1.25*f_hi
+            q2 = max(q2, 1)
+            decim_q[name] = q2
+            fs_after[name] = fs / q2
+
+    # Output structure
+    results = {name: [] for name in bands.keys()}
+
+    # Main loop: ONE get_traces per window
+    for w_idx, (start_frame, end_frame) in enumerate(frame_windows):
+        # 1) Read once
+        X = recording.get_traces(start_frame=int(start_frame), end_frame=int(end_frame))
+        X = X.astype(dtype, copy=False)  # T x C
+
+        # Optional: basic de-meaning now can help numerical stability
+        # (Filtering will reintroduce mean offsets depending on band; not critical.)
+        # X = X - X.mean(axis=0, keepdims=True)
+
+        # 2) For each band: filter in-memory, downsample, correlate
+        for name, (f_lo, f_hi) in bands.items():
+            sos = band_sos[name]
+            if streaming_filter:
+                Xb = sosfilt(sos, X, axis=0)
+            else:
+                Xb = sosfiltfilt(sos, X, axis=0)
+
+            q = decim_q[name]
+            if q > 1:
+                Xb = _safe_decimate(Xb, q=q, zero_phase=decimate_zero_phase)
+
+            C = _corrcoef_fast(Xb)
+            results[name].append(C)
+
+    return results
+    
 def _merge_seperate_asset_recording_dicts(
     d1: DefaultDict[str, list[T]],
     d2: DefaultDict[str, list[T]],
@@ -1040,24 +1197,39 @@ def save_lfp_correlation(
         f"Found list of frames to compute correlation {time_frames_rec}"
     )
     # calculate lfp correlation
-    for index in range(len(time_frames_rec) - 1):
-        for band, (low_f, high_f) in bands.items():
-            # bandpass
-            D_band = bandpass_filtered_recordings[(band, (low_f, high_f))]
-            # correlation across channels
-            corr_matrix = np.corrcoef(
-                D_band.get_traces(
-                    start_frame=time_frames_rec[index],
-                    end_frame=time_frames_rec[index + 1],
-                ).T
-            )
-            logging.info(
-                f"Processing LFP correlation for band {band}"
-                f"across frames {time_frames_rec[index]} "
-                f"to {time_frames_rec[index + 1]}"
-            )
-            band_corrs[band].append(corr_matrix)
+    # for index in range(len(time_frames_rec) - 1):
+    #     for band, (low_f, high_f) in bands.items():
+    #         # bandpass
+    #         D_band = bandpass_filtered_recordings[(band, (low_f, high_f))]
+    #         # correlation across channels
+    #         corr_matrix = np.corrcoef(
+    #             D_band.get_traces(
+    #                 start_frame=time_frames_rec[index],
+    #                 end_frame=time_frames_rec[index + 1],
+    #             ).T
+    #         )
+    #         logging.info(
+    #             f"Processing LFP correlation for band {band}"
+    #             f"across frames {time_frames_rec[index]} "
+    #             f"to {time_frames_rec[index + 1]}"
+    #         )
+    #         band_corrs[band].append(corr_matrix)
 
+    band_corrs = compute_lfp_band_correlations_dropin(
+        recording,                # your LFP recording object
+        frame_windows,
+        bands,
+        max_fs_by_band={
+            "delta": 200.0,
+            "theta": 250.0,
+            "alpha": 300.0,
+            "beta":  400.0,
+            "gamma": 500.0,        # 500 is usually enough for 30–80 Hz gamma
+        },
+        decimate_zero_phase=False,  # faster; OK for correlation magnitude
+        streaming_filter=False,     # True if you want faster (phase distortion)
+    )
+    
     # average across windows
     for band in band_corrs:
         band_corrs[band] = np.nanmean(np.stack(band_corrs[band]), axis=0)
