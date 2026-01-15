@@ -21,13 +21,13 @@ from spikeinterface.exporters.to_ibl import compute_rms
 from scipy.signal import butter, sosfiltfilt, sosfilt, decimate
 
 
-
 STREAM_PROBE_REGEX = re.compile(r"^Record Node \d+#[^.]+\.(.+?)(-AP|-LFP)?$")
 T = TypeVar("T")
 
 
-
-def _design_bandpass_sos(low_hz: float, high_hz: float, fs: float, order: int = 4):
+def _design_bandpass_sos(
+    low_hz: float, high_hz: float, fs: float, order: int = 4
+):
     """
     Stable IIR bandpass in SOS form.
     """
@@ -39,7 +39,9 @@ def _design_bandpass_sos(low_hz: float, high_hz: float, fs: float, order: int = 
     return butter(order, [low, high], btype="bandpass", output="sos")
 
 
-def _safe_decimate(X: np.ndarray, q: int, *, zero_phase: bool = True) -> np.ndarray:
+def _safe_decimate(
+    X: np.ndarray, q: int, *, zero_phase: bool = True
+) -> np.ndarray:
     """
     Downsample along axis=0 (time). Uses scipy.signal.decimate with IIR anti-alias.
     """
@@ -132,7 +134,9 @@ def compute_lfp_band_correlations_dropin(
     decim_q = {}
     fs_after = {}
     for name, (f_lo, f_hi) in bands.items():
-        band_sos[name] = _design_bandpass_sos(f_lo, f_hi, fs, order=bandpass_order)
+        band_sos[name] = _design_bandpass_sos(
+            f_lo, f_hi, fs, order=bandpass_order
+        )
 
         target_fs = float(max_fs_by_band.get(name, fs))
         # choose integer decimation to bring fs down near (<=) target_fs
@@ -156,7 +160,9 @@ def compute_lfp_band_correlations_dropin(
     # Main loop: ONE get_traces per window
     for w_idx, (start_frame, end_frame) in enumerate(frame_windows):
         # 1) Read once
-        X = recording.get_traces(start_frame=int(start_frame), end_frame=int(end_frame))
+        X = recording.get_traces(
+            start_frame=int(start_frame), end_frame=int(end_frame)
+        )
         X = X.astype(dtype, copy=False)  # T x C
 
         # Optional: basic de-meaning now can help numerical stability
@@ -179,7 +185,8 @@ def compute_lfp_band_correlations_dropin(
             results[name].append(C)
 
     return results
-    
+
+
 def _merge_seperate_asset_recording_dicts(
     d1: DefaultDict[str, list[T]],
     d2: DefaultDict[str, list[T]],
@@ -259,6 +266,62 @@ def _stream_to_probe_name(stream_name: str) -> str | None:
     if m is not None:
         return m.group(1)
     return None
+
+
+def compute_lfp_psd_streaming(
+    recording,
+    *,
+    target_freq_resolution_psd: float,
+    num_chunks: int = 30,
+    chunk_duration_s: float = 1.0,
+    max_channels: int | None = None,
+    dtype=np.float32,
+):
+    fs = float(recording.sampling_frequency)
+
+    nperseg = int(fs / float(target_freq_resolution_psd))
+    nperseg = 2 ** int(np.log2(nperseg))  # power of 2
+
+    # pick channels (optional downselect to avoid memory/time)
+    chan_ids = recording.get_channel_ids()
+    if max_channels is not None and len(chan_ids) > max_channels:
+        chan_ids = chan_ids[:max_channels]
+        recording = recording.channel_slice(channel_ids=chan_ids)
+
+    n_channels = recording.get_num_channels()
+    seg = 0  # you already select largest segment upstream
+
+    # choose random start frames
+    total = recording.get_num_samples(segment_index=seg)
+    chunk_len = int(chunk_duration_s * fs)
+    rng = np.random.default_rng(0)
+    starts = rng.integers(0, max(1, total - chunk_len - 1), size=num_chunks)
+
+    psd_sum = None
+    freqs_out = None
+
+    for s in starts:
+        X = recording.get_traces(
+            start_frame=int(s),
+            end_frame=int(s + chunk_len),
+            segment_index=seg,
+        ).astype(
+            dtype, copy=False
+        )  # (T, C)
+
+        freqs, Pxx = welch(X, fs=fs, nperseg=nperseg, axis=0)  # (F, C)
+
+        if psd_sum is None:
+            psd_sum = np.zeros_like(Pxx, dtype=np.float32)
+            freqs_out = freqs.astype(np.float32, copy=False)
+
+        psd_sum += Pxx.astype(np.float32, copy=False)
+
+        # free chunk ASAP
+        del X, Pxx
+
+    psd = psd_sum / float(num_chunks)
+    return freqs_out, psd
 
 
 def extract_spikes(  # noqa: C901
@@ -987,17 +1050,25 @@ def save_rms_and_lfp_spectrum(
 
         # freqs = freqs.astype(np.float32)
 
-        ### Yoni/ChatGPT fix
-        freqs, Pxx = welch(
-            lfp_sample_data,
-            fs=float(recording.sampling_frequency),
-            nperseg=nperseg,
-            axis=0,              # time axis
-        )
-        psd = Pxx.astype(np.float32, copy=False)
-        freqs = freqs.astype(np.float32, copy=False)
+        ### Yoni/ChatGPT fix- version 1
+        # freqs, Pxx = welch(
+        #     lfp_sample_data,
+        #     fs=float(recording.sampling_frequency),
+        #     nperseg=nperseg,
+        #     axis=0,              # time axis
+        # )
+        # psd = Pxx.astype(np.float32, copy=False)
+        # freqs = freqs.astype(np.float32, copy=False)
 
-        
+        ### ChatGPT fix- version 2 (streaming, less memory)
+        freqs, psd = compute_lfp_psd_streaming(
+            recording,
+            target_freq_resolution_psd=target_freq_resolution_psd,
+            num_chunks=30,
+            chunk_duration_s=1.0,
+            dtype=np.float32,
+        )
+
         end_time_lfp_spectrum = datetime.now()
         elapsed_time_lfp_spectrum = (
             end_time_lfp_spectrum - start_time_lfp_spectrum
@@ -1216,20 +1287,20 @@ def save_lfp_correlation(
     #         band_corrs[band].append(corr_matrix)
 
     band_corrs = compute_lfp_band_correlations_dropin(
-        recording,                # your LFP recording object
+        recording,  # your LFP recording object
         frame_windows,
         bands,
         max_fs_by_band={
             "delta": 200.0,
             "theta": 250.0,
             "alpha": 300.0,
-            "beta":  400.0,
-            "gamma": 500.0,        # 500 is usually enough for 30–80 Hz gamma
+            "beta": 400.0,
+            "gamma": 500.0,  # 500 is usually enough for 30–80 Hz gamma
         },
         decimate_zero_phase=False,  # faster; OK for correlation magnitude
-        streaming_filter=False,     # True if you want faster (phase distortion)
+        streaming_filter=False,  # True if you want faster (phase distortion)
     )
-    
+
     # average across windows
     for band in band_corrs:
         band_corrs[band] = np.nanmean(np.stack(band_corrs[band]), axis=0)
