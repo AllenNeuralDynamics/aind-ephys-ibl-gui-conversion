@@ -988,7 +988,8 @@ def save_rms_and_lfp_spectrum(
     if not is_lfp:
         # AP RMS decimation (big speedup, still meaningful QC)
         recording_for_rms = _maybe_decimate_aggregated_safe(recording, target_fs=2000.0)
-
+    else:
+        recording_for_rms = _maybe_decimate_aggregated_safe(recording, target_fs=1000.0)
     rms, rms_times = compute_rms(recording_for_rms, n_jobs=n_jobs)
 
     end_time_rms = datetime.now()
