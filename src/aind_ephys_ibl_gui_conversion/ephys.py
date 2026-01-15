@@ -957,6 +957,7 @@ def save_rms_and_lfp_spectrum(
     n_jobs: int = 10,
     is_lfp: bool = False,
     tag: Union[str, None] = None,
+    skip_rms: bool = True,  # For debugging only: will usually be False
 ) -> None:
     """
     Saves rms and lfp spectrum for the given recording
@@ -990,45 +991,52 @@ def save_rms_and_lfp_spectrum(
         in the filenames for the saved metrics.
 
     """
-    logging.info(
-        f"Computing rms with chunk duration {chunk_duration}s "
-        f"and using number of parallel jobs {n_jobs}"
-    )
-    start_time_rms = datetime.now()
-    rms, rms_times = compute_rms(
-        recording, chunk_duration=chunk_duration, n_jobs=n_jobs
-    )
-    end_time_rms = datetime.now()
-    elapsed_time_rms = end_time_rms - start_time_rms
-    logging.info(
-        "Elapsed time for rms:"
-        f"{elapsed_time_rms.total_seconds():.6f} seconds"
-    )
+    if not skip_rms:
+        logging.info(
+            f"Computing rms with chunk duration {chunk_duration}s "
+            f"and using number of parallel jobs {n_jobs}"
+        )
+        start_time_rms = datetime.now()
+        rms, rms_times = compute_rms(
+            recording, chunk_duration=chunk_duration, n_jobs=n_jobs
+        )
+        end_time_rms = datetime.now()
+        elapsed_time_rms = end_time_rms - start_time_rms
+        logging.info(
+            "Elapsed time for rms:"
+            f"{elapsed_time_rms.total_seconds():.6f} seconds"
+        )
 
-    tag = tag if tag is not None else ""
+        tag = tag if tag is not None else ""
 
-    if not is_lfp:
-        file_path_to_save_rms = f"_iblqc_ephysTimeRmsAP{tag}.rms.npy"
-        file_path_to_save_times = f"_iblqc_ephysTimeRmsAP{tag}.timestamps.npy"
+        if not is_lfp:
+            file_path_to_save_rms = f"_iblqc_ephysTimeRmsAP{tag}.rms.npy"
+            file_path_to_save_times = (
+                f"_iblqc_ephysTimeRmsAP{tag}.timestamps.npy"
+            )
+        else:
+            file_path_to_save_rms = f"_iblqc_ephysTimeRmsLF{tag}.rms.npy"
+            file_path_to_save_times = (
+                f"_iblqc_ephysTimeRmsLF{tag}.timestamps.npy"
+            )
+
+        np.save(output_folder / file_path_to_save_rms, rms)
+        np.save(
+            output_folder / file_path_to_save_times,
+            rms_times,
+        )
     else:
-        file_path_to_save_rms = f"_iblqc_ephysTimeRmsLF{tag}.rms.npy"
-        file_path_to_save_times = f"_iblqc_ephysTimeRmsLF{tag}.timestamps.npy"
-
-    np.save(output_folder / file_path_to_save_rms, rms)
-    np.save(
-        output_folder / file_path_to_save_times,
-        rms_times,
-    )
+        logging.info("Skipping RMS computation as per user request.")
 
     if is_lfp:
         logging.info("Computing LFP spectrum")
         start_time_lfp_spectrum = datetime.now()
-        lfp_sample_data = get_random_data_chunks(
-            recording,
-            num_chunks_per_segment=100,
-            chunk_duration=chunk_duration,
-            concatenated=True,
-        )
+        # lfp_sample_data = get_random_data_chunks(
+        #     recording,
+        #     num_chunks_per_segment=100,
+        #     chunk_duration=chunk_duration,
+        #     concatenated=True,
+        # )
         fs = recording.sampling_frequency
 
         nperseg = int(fs / target_freq_resolution_psd)
@@ -1064,8 +1072,8 @@ def save_rms_and_lfp_spectrum(
         freqs, psd = compute_lfp_psd_streaming(
             recording,
             target_freq_resolution_psd=target_freq_resolution_psd,
-            num_chunks=30,
-            chunk_duration_s=1.0,
+            num_chunks=100,
+            chunk_duration_s=chunk_duration,
             dtype=np.float32,
         )
 
