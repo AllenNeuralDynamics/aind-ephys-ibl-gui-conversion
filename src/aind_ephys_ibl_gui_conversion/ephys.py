@@ -615,6 +615,7 @@ def get_stream_mappings(
     neuropix_streams: list,
     num_blocks: int,
     ecephys_compressed_folder: Path,
+    stream_to_use: Union[str, None] = None,
     main_recording_min_secs: int = 600,
     freq_min: float = 1,
     freq_max: float = 300,
@@ -643,6 +644,9 @@ def get_stream_mappings(
         Number of experiment blocks to process.
     ecephys_compressed_folder : Path
         Path to the folder containing the compressed Zarr recordings.
+    stream_to_use: Union[str, None] = None,
+        If provided, this will execute only on the stream passed in
+        for this parameter. Else, all streams will be processed
     main_recording_min_secs : int, optional
         Minimum duration (in seconds) separating main from surface recordings.
         Defaults to 600 seconds.
@@ -675,6 +679,9 @@ def get_stream_mappings(
     surface_recordings_lfp = defaultdict(list)
 
     for idx, stream_name in enumerate(neuropix_streams):
+        if stream_to_use is not None and stream_name != stream_to_use:
+            continue
+
         if "LFP" in stream_name:
             continue
 
@@ -1197,6 +1204,7 @@ def process_raw_data(
 def extract_continuous(
     sorting_folder: Path,
     results_folder: Path,
+    stream_to_use: Union[str, None] = None,
     main_recording_min_secs: int = 600,
     probe_surface_finding: Union[Path, None] = None,
     lfp_freq_min: float = 1,
@@ -1225,6 +1233,10 @@ def extract_continuous(
         data will be saved. The extracted signals
         will be written to files within this directory,
         typically in formats suitable for further analysis.
+
+    stream_to_use: Union[str, None] = None,
+        If provided, this will execute only on the stream passed in
+        for this parameter. Else, all streams will be processed
 
     main_recording_min_secs : int, optional, default=600
         Minimum duration (in seconds) separating main from surface recordings.
@@ -1274,6 +1286,11 @@ def extract_continuous(
     neuropix_streams, ecephys_compressed_folder, num_blocks = (
         get_ecephys_stream_names(session_folder)
     )
+    if stream_to_use is not None:
+        logging.info(
+            "Stream name provided as parameter. Will only process "
+            f"{stream_to_use}"
+        )
     # surface recording is a seperate asset,
     # identified by probe_surface_finding
     neuropix_streams_surface = []
@@ -1293,6 +1310,7 @@ def extract_continuous(
         neuropix_streams,
         num_blocks,
         ecephys_compressed_folder,
+        stream_to_use=stream_to_use,
         main_recording_min_secs=main_recording_min_secs,
         freq_min=lfp_freq_min,
         freq_max=lfp_freq_max,
@@ -1310,6 +1328,7 @@ def extract_continuous(
             neuropix_streams_surface,
             num_blocks,
             ecephys_compressed_folder_surface,
+            stream_to_use=stream_to_use,
             main_recording_min_secs=main_recording_min_secs,
             freq_min=lfp_freq_min,
             freq_max=lfp_freq_max,
