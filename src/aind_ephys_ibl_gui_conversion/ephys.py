@@ -812,7 +812,7 @@ def save_rms_and_lfp_spectrum(
         start_time_lfp_spectrum = datetime.now()
         lfp_sample_data = get_random_data_chunks(
             recording,
-            num_chunks_per_segment=100,
+            num_chunks_per_segment=15,
             chunk_duration=chunk_duration,
             concatenated=True,
         )
@@ -1214,7 +1214,7 @@ def extract_continuous(
     target_freq_resolution_psd: float = 0.5,
     chunk_duration: float = 15.0,
     lfp_correlation_min_secs: int = 600,
-    lfp_correlation_num_bins: int = 10,
+    lfp_correlation_num_bins: int = 5,
 ):
     """
     Extract features from raw data
