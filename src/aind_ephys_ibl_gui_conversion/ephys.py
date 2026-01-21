@@ -105,7 +105,10 @@ def _stream_to_probe_name(stream_name: str) -> str | None:
 
 
 def extract_spikes(  # noqa: C901
-    sorting_folder, results_folder, min_duration_secs: int = 300
+    sorting_folder: str, 
+    results_folder: str,
+    stream_to_use: Union[str, None] = None, 
+    min_duration_secs: int = 300
 ):
     """
     Extract spike data from a sorting folder and
@@ -123,6 +126,10 @@ def extract_spikes(  # noqa: C901
         The path to the folder where the extracted
         spike data will be saved. The extracted data
         will be written to this folder in an appropriate format.
+
+    stream_to_use: Union[str, None] = None,
+        If provided, this will execute only on the stream passed in
+        for this parameter. Else, all streams will be processed
 
     min_duration_secs : int, optional, default=300
         The minimum duration (in seconds) of spike events
@@ -165,7 +172,16 @@ def extract_spikes(  # noqa: C901
     neuropix_streams = [s for s in stream_names if "Neuropix" in s]
     probe_names = [_stream_to_probe_name(s) for s in neuropix_streams]
 
+    if stream_to_use is not None:
+        logging.info(
+            "Stream name provided as parameter. Will only process "
+            f"{stream_to_use}"
+        )
+
     for idx, stream_name in enumerate(neuropix_streams):
+        if stream_to_use is not None and stream_name != stream_to_use:
+            continue
+        
         analyzer_mappings = []
         num_shanks = 0
         shank_glob = tuple(postprocessed_folder.glob(f"*{stream_name}*group*"))
