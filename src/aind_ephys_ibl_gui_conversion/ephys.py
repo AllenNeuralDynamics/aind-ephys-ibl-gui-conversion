@@ -105,8 +105,8 @@ def _stream_to_probe_name(stream_name: str) -> str | None:
 
 
 def extract_spikes(  # noqa: C901
-    sorting_folder: str, 
-    results_folder: str,
+    sorting_folder: Path, 
+    results_folder: Path,
     stream_to_use: Union[str, None] = None, 
     min_duration_secs: int = 300
 ):
@@ -116,13 +116,13 @@ def extract_spikes(  # noqa: C901
 
     Parameters
     ----------
-    sorting_folder : str
+    sorting_folder : Path
         The path to the folder containing the sorted spike data.
         This folder is expected to
         contain files or directories related to
         spike sorting results (e.g., .npy, .csv, etc.).
 
-    results_folder : str
+    results_folder : Path
         The path to the folder where the extracted
         spike data will be saved. The extracted data
         will be written to this folder in an appropriate format.
