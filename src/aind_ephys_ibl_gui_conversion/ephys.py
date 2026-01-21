@@ -806,6 +806,10 @@ def save_rms_and_lfp_spectrum(
     rms, rms_times = compute_rms(
         recording, chunk_duration=chunk_duration, n_jobs=n_jobs
     )
+    nan_mask = np.isnan(rms)
+    # gui seems to fail if nans, log and see how many
+    logging.info(f"RMS NaNs: {nan_mask.sum()}")
+    rms[nan_mask] = 0.0 
     end_time_rms = datetime.now()
     elapsed_time_rms = end_time_rms - start_time_rms
     logging.info(
