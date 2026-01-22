@@ -1375,16 +1375,16 @@ def extract_continuous(
 
         # combine this with mappings above for
         # seperate surface finding asset
-        main_recordings_ap = _merge_seperate_asset_recording_dicts(
+        main_recordings_ap = _merge_separate_asset_recording_dicts(
             main_recordings_ap, main_recordings_separate_ap
         )
-        surface_recordings_ap = _merge_seperate_asset_recording_dicts(
+        surface_recordings_ap = _merge_separate_asset_recording_dicts(
             surface_recordings_ap, surface_recordings_separate_ap
         )
-        main_recordings_lfp = _merge_seperate_asset_recording_dicts(
+        main_recordings_lfp = _merge_separate_asset_recording_dicts(
             main_recordings_lfp, main_recordings_separate_lfp
         )
-        surface_recordings_lfp = _merge_seperate_asset_recording_dicts(
+        surface_recordings_lfp = _merge_separate_asset_recording_dicts(
             surface_recordings_lfp, surface_separate_recordings_lfp
         )
 
