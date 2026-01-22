@@ -23,7 +23,7 @@ STREAM_PROBE_REGEX = re.compile(r"^Record Node \d+#[^.]+\.(.+?)(-AP|-LFP)?$")
 T = TypeVar("T")
 
 
-def _merge_seperate_asset_recording_dicts(
+def _merge_separate_asset_recording_dicts(
     d1: DefaultDict[str, list[T]],
     d2: DefaultDict[str, list[T]],
 ) -> DefaultDict[str, list[T]]:
