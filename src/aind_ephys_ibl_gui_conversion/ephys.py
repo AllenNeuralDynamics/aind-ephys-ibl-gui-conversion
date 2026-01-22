@@ -105,10 +105,10 @@ def _stream_to_probe_name(stream_name: str) -> str | None:
 
 
 def extract_spikes(  # noqa: C901
-    sorting_folder: Path, 
+    sorting_folder: Path,
     results_folder: Path,
-    stream_to_use: Union[str, None] = None, 
-    min_duration_secs: int = 300
+    stream_to_use: Union[str, None] = None,
+    min_duration_secs: int = 300,
 ):
     """
     Extract spike data from a sorting folder and
@@ -181,7 +181,7 @@ def extract_spikes(  # noqa: C901
     for idx, stream_name in enumerate(neuropix_streams):
         if stream_to_use is not None and stream_name != stream_to_use:
             continue
-        
+
         analyzer_mappings = []
         num_shanks = 0
         shank_glob = tuple(postprocessed_folder.glob(f"*{stream_name}*group*"))
@@ -512,7 +512,7 @@ def process_lfp_stream(
     freq_min: float,
     freq_max: float,
     target_sample_rate: float,
-    margin_ms: float = 3000.0
+    margin_ms: float = 3000.0,
 ) -> si.BaseRecording:
     """
     Apply LFP preprocessing to a Neuropixels recording.
@@ -535,7 +535,7 @@ def process_lfp_stream(
         The upper cutoff frequency for the bandpass filter (in Hz).
     target_sample_rate : float
         The target sample rate to downsample to (only used for 2.0 probes).
-    
+
     margin_ms: float
         Padding (in ms) added to each chunk before bandpass filtering
         to reduce edge artifacts.
@@ -553,7 +553,10 @@ def process_lfp_stream(
             f"and freq max {freq_max}"
         )
         recording_lfp = spre.bandpass_filter(
-            recording, freq_min=freq_min, freq_max=freq_max, margin_ms=margin_ms
+            recording,
+            freq_min=freq_min,
+            freq_max=freq_max,
+            margin_ms=margin_ms,
         )
     else:  # 2.0 probe, decimate to 1250
         logging.info("Found 2.0 probe")
@@ -562,7 +565,10 @@ def process_lfp_stream(
             f"and freq max {freq_max}"
         )
         recording_lfp_bandpass = spre.bandpass_filter(
-            recording, freq_min=freq_min, freq_max=freq_max, margin_ms=margin_ms
+            recording,
+            freq_min=freq_min,
+            freq_max=freq_max,
+            margin_ms=margin_ms,
         )
         decimation_factor = int(
             recording_lfp_bandpass.sampling_frequency / target_sample_rate
@@ -809,7 +815,7 @@ def save_rms_and_lfp_spectrum(
     nan_mask = np.isnan(rms)
     # gui seems to fail if nans, log and see how many
     logging.info(f"RMS NaNs: {nan_mask.sum()}")
-    rms[nan_mask] = 0.0 
+    rms[nan_mask] = 0.0
     end_time_rms = datetime.now()
     elapsed_time_rms = end_time_rms - start_time_rms
     logging.info(
@@ -1202,7 +1208,7 @@ def process_raw_data(
         "Running RMS and LFP spectrum (if LFP stream) "
         f"on main recording for stream {stream_name}"
     )
-    
+
     tag = "" if recording_combined is None else "Main"
     save_rms_and_lfp_spectrum(
         main_recording,
@@ -1242,7 +1248,7 @@ def extract_continuous(
     chunk_duration: float = 15.0,
     lfp_correlation_min_secs: int = 600,
     lfp_correlation_num_bins: int = 5,
-    lfp_bandpass_margin_ms: float = 3000.0
+    lfp_bandpass_margin_ms: float = 3000.0,
 ):
     """
     Extract features from raw data
@@ -1306,7 +1312,7 @@ def extract_continuous(
 
     lfp_correlation_num_bins : int, default = 10
         Number of bins used to compute LFP correlation.
-    
+
     lfp_bandpass_margin_ms: float = 3000
         Padding (in ms) added to each chunk before bandpass filtering
         to reduce edge artifacts.
