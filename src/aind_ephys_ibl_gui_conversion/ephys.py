@@ -23,12 +23,12 @@ STREAM_PROBE_REGEX = re.compile(r"^Record Node \d+#[^.]+\.(.+?)(-AP|-LFP)?$")
 T = TypeVar("T")
 
 
-def _merge_main_and_surface_recording_dicts(
+def _merge_separate_asset_recording_dicts(
     d1: DefaultDict[str, list[T]],
     d2: DefaultDict[str, list[T]],
 ) -> DefaultDict[str, list[T]]:
     """
-    Merge main and surface recordings when surface ephys
+    Merge recordings when surface ephys
     is recorded as a separate data asset.
 
     Keys are expected to overlap; values are concatenated.
@@ -105,7 +105,10 @@ def _stream_to_probe_name(stream_name: str) -> str | None:
 
 
 def extract_spikes(  # noqa: C901
-    sorting_folder, results_folder, min_duration_secs: int = 300
+    sorting_folder: Path,
+    results_folder: Path,
+    stream_to_use: Union[str, None] = None,
+    min_duration_secs: int = 300,
 ):
     """
     Extract spike data from a sorting folder and
@@ -113,16 +116,20 @@ def extract_spikes(  # noqa: C901
 
     Parameters
     ----------
-    sorting_folder : str
+    sorting_folder : Path
         The path to the folder containing the sorted spike data.
         This folder is expected to
         contain files or directories related to
         spike sorting results (e.g., .npy, .csv, etc.).
 
-    results_folder : str
+    results_folder : Path
         The path to the folder where the extracted
         spike data will be saved. The extracted data
         will be written to this folder in an appropriate format.
+
+    stream_to_use: Union[str, None] = None,
+        If provided, this will execute only on the stream passed in
+        for this parameter. Else, all streams will be processed
 
     min_duration_secs : int, optional, default=300
         The minimum duration (in seconds) of spike events
@@ -165,7 +172,16 @@ def extract_spikes(  # noqa: C901
     neuropix_streams = [s for s in stream_names if "Neuropix" in s]
     probe_names = [_stream_to_probe_name(s) for s in neuropix_streams]
 
+    if stream_to_use is not None:
+        logging.info(
+            "Stream name provided as parameter. Will only process "
+            f"{stream_to_use}"
+        )
+
     for idx, stream_name in enumerate(neuropix_streams):
+        if stream_to_use is not None and stream_name != stream_to_use:
+            continue
+
         analyzer_mappings = []
         num_shanks = 0
         shank_glob = tuple(postprocessed_folder.glob(f"*{stream_name}*group*"))
@@ -496,6 +512,7 @@ def process_lfp_stream(
     freq_min: float,
     freq_max: float,
     target_sample_rate: float,
+    margin_ms: float = 3000.0,
 ) -> si.BaseRecording:
     """
     Apply LFP preprocessing to a Neuropixels recording.
@@ -503,7 +520,7 @@ def process_lfp_stream(
     For Neuropixels 1.0 probes, the function applies a bandpass filter
     to the recording between the specified frequency limits.
     For Neuropixels 2.0 probes, it additionally downsamples the filtered
-    signal by the given decimation factor (typically to ~1.25 kHz).
+    signal to the target sample rate (typically to ~1.25 kHz).
 
     Parameters
     ----------
@@ -519,6 +536,10 @@ def process_lfp_stream(
     target_sample_rate : float
         The target sample rate to downsample to (only used for 2.0 probes).
 
+    margin_ms: float
+        Padding (in ms) added to each chunk before bandpass filtering
+        to reduce edge artifacts.
+
     Returns
     -------
     si.BaseRecording
@@ -531,8 +552,11 @@ def process_lfp_stream(
             f"with freq min {freq_min} "
             f"and freq max {freq_max}"
         )
-        return spre.bandpass_filter(
-            recording, freq_min=freq_min, freq_max=freq_max
+        recording_lfp = spre.bandpass_filter(
+            recording,
+            freq_min=freq_min,
+            freq_max=freq_max,
+            margin_ms=margin_ms,
         )
     else:  # 2.0 probe, decimate to 1250
         logging.info("Found 2.0 probe")
@@ -541,7 +565,10 @@ def process_lfp_stream(
             f"and freq max {freq_max}"
         )
         recording_lfp_bandpass = spre.bandpass_filter(
-            recording, freq_min=freq_min, freq_max=freq_max
+            recording,
+            freq_min=freq_min,
+            freq_max=freq_max,
+            margin_ms=margin_ms,
         )
         decimation_factor = int(
             recording_lfp_bandpass.sampling_frequency / target_sample_rate
@@ -550,9 +577,14 @@ def process_lfp_stream(
             f"Applying decimation with factor {decimation_factor} "
             f"to target sample rate {target_sample_rate}"
         )
-        return spre.decimate(
+        recording_lfp = spre.decimate(
             recording_lfp_bandpass, decimation_factor=decimation_factor
         )
+
+    logging.info("Applying cmr to lfp recording")
+    return spre.common_reference(
+        recording_lfp, reference="global", operator="median"
+    )
 
 
 def get_neuropixel_lfp_stream(
@@ -610,6 +642,7 @@ def get_stream_mappings(
     neuropix_streams: list,
     num_blocks: int,
     ecephys_compressed_folder: Path,
+    stream_to_use: Union[str, None] = None,
     main_recording_min_secs: int = 600,
     freq_min: float = 1,
     freq_max: float = 300,
@@ -638,6 +671,9 @@ def get_stream_mappings(
         Number of experiment blocks to process.
     ecephys_compressed_folder : Path
         Path to the folder containing the compressed Zarr recordings.
+    stream_to_use: Union[str, None] = None,
+        If provided, this will execute only on the stream passed in
+        for this parameter. Else, all streams will be processed
     main_recording_min_secs : int, optional
         Minimum duration (in seconds) separating main from surface recordings.
         Defaults to 600 seconds.
@@ -647,10 +683,8 @@ def get_stream_mappings(
     freq_max : float, optional
         Upper cutoff frequency (Hz) for LFP bandpass filtering.
         Defaults to 300 Hz.
-    decimation_factor : int, optional
-        Downsampling factor for LFP streams
-        (used only for Neuropixels 2.0 probes).
-        Defaults to 24.
+    target_sample_rate : float
+        The target sample rate to downsample to (only used for 2.0 probes).
 
     Returns
     -------
@@ -672,6 +706,9 @@ def get_stream_mappings(
     surface_recordings_lfp = defaultdict(list)
 
     for idx, stream_name in enumerate(neuropix_streams):
+        if stream_to_use is not None and stream_name != stream_to_use:
+            continue
+
         if "LFP" in stream_name:
             continue
 
@@ -730,6 +767,7 @@ def save_rms_and_lfp_spectrum(
     recording: si.BaseRecording,
     output_folder: Path,
     target_freq_resolution_psd: float,
+    chunk_duration: float,
     n_jobs: int = 10,
     is_lfp: bool = False,
     tag: Union[str, None] = None,
@@ -748,6 +786,12 @@ def save_rms_and_lfp_spectrum(
     target_freq_resolution_psd: float
         Target frequency resolution for PSD in Hz
 
+    chunk_duration : float
+        Chunk length (in seconds) used for
+        lazy loading and processingof continuous data.
+        Longer chunks improve stability for
+        low-frequency (LFP) filtering and spectral estimates.
+
     n_jobs: int, default = 10
         The number of jobs to parallelize rms
 
@@ -760,9 +804,18 @@ def save_rms_and_lfp_spectrum(
         in the filenames for the saved metrics.
 
     """
-    logging.info("Computing rms")
+    logging.info(
+        f"Computing rms with chunk duration {chunk_duration}s "
+        f"and using number of parallel jobs {n_jobs}"
+    )
     start_time_rms = datetime.now()
-    rms, rms_times = compute_rms(recording, n_jobs=n_jobs)
+    rms, rms_times = compute_rms(
+        recording, chunk_duration=chunk_duration, n_jobs=n_jobs
+    )
+    nan_mask = np.isnan(rms)
+    # gui seems to fail if nans, log and see how many
+    logging.info(f"RMS NaNs: {nan_mask.sum()}")
+    rms[nan_mask] = 0.0
     end_time_rms = datetime.now()
     elapsed_time_rms = end_time_rms - start_time_rms
     logging.info(
@@ -790,8 +843,8 @@ def save_rms_and_lfp_spectrum(
         start_time_lfp_spectrum = datetime.now()
         lfp_sample_data = get_random_data_chunks(
             recording,
-            num_chunks_per_segment=100,
-            chunk_duration="1s",
+            num_chunks_per_segment=15,
+            chunk_duration=chunk_duration,
             concatenated=True,
         )
         fs = recording.sampling_frequency
@@ -944,6 +997,115 @@ def get_main_recording_from_list(
     return max(recordings, key=lambda r: r.get_num_samples())
 
 
+def save_lfp_correlation(
+    recording: si.BaseRecording,
+    output_folder: Path,
+    lfp_correlation_min_secs: int,
+    lfp_correlation_num_bins: int,
+    tag: Union[str, None] = None,
+):
+    """
+    Saves LFP correlation arrays for frequency bands
+    to the specfied output folder.
+
+    Correlation is done for delta, theta, alpha, beta,
+    and gamma frequency bands.
+
+    Runs decimation and common median referencing before
+    as preprocessing step
+
+    Parameters
+    ----------
+    recording: si.BaseRecording
+        The recording to run correlation on
+
+    output_folder: Path
+        The output folder to save outputs to
+
+    lfp_correlation_min_secs : int
+        Duration (seconds) of data used for LFP correlation.
+
+    lfp_correlation_num_bins : int
+        Number of bins used to compute LFP correlation.
+
+    tag : str or None, optional, default=None
+        An optional tag used to distinguish different outputs.
+        If provided, this string will be included
+        in the filenames for the saved metrics.
+    """
+    # Adapted from code from Sue:
+    # https://github.com/AllenNeuralDynamics/aind-beh-ephys-analysis/blob/main/code/beh_ephys_analysis/ephys_spatial_feature.py#L583
+    start_time_lfp_corr = datetime.now()
+
+    bands = {
+        "delta": [0.5, 4],
+        "theta": [4, 12],
+        "alpha": [12, 30],
+        "beta": [30, 100],
+        "gamma": [100, 300],
+    }
+
+    band_corrs = {band: [] for band in bands}
+    bandpass_filtered_recordings = {}
+    for band, (low_f, high_f) in bands.items():
+        margin_ms = (1 / low_f) * 3 * 1000
+        bandpass_filtered_recordings[(band, (low_f, high_f))] = (
+            spre.bandpass_filter(
+                recording, freq_min=low_f, freq_max=high_f, margin_ms=margin_ms
+            )
+        )
+
+    max_time_window = min(lfp_correlation_min_secs, recording.get_duration())
+    time_frames = np.linspace(0, max_time_window, lfp_correlation_num_bins + 1)
+    time_frames_rec = (
+        time_frames * recording.get_sampling_frequency()
+    ).astype(int)
+
+    logging.info(
+        f"Found list of frames to compute correlation {time_frames_rec}"
+    )
+    # calculate lfp correlation
+    for index in range(len(time_frames_rec) - 1):
+        for band, (low_f, high_f) in bands.items():
+            # bandpass
+            D_band = bandpass_filtered_recordings[(band, (low_f, high_f))]
+            # correlation across channels
+            corr_matrix = np.corrcoef(
+                D_band.get_traces(
+                    start_frame=time_frames_rec[index],
+                    end_frame=time_frames_rec[index + 1],
+                ).T
+            )
+            logging.info(
+                f"Processing LFP correlation for band {band}"
+                f"across frames {time_frames_rec[index]} "
+                f"to {time_frames_rec[index + 1]}"
+            )
+            band_corrs[band].append(corr_matrix)
+
+    # average across windows
+    for band in band_corrs:
+        band_corrs[band] = np.nanmean(np.stack(band_corrs[band]), axis=0)
+
+    # gui requires this folder
+    folder_to_save = output_folder / "band_corr"
+    folder_to_save.mkdir(exist_ok=True)
+    logging.info(f"Saving LFP correlation to folder {folder_to_save}")
+    if tag is None:
+        for band, corr in band_corrs.items():
+            np.save(folder_to_save / f"{band}_mean_corr.npy", corr)
+    else:
+        for band, corr in band_corrs.items():
+            np.save(folder_to_save / f"{band}_{tag}_mean_corr.npy", corr)
+
+    end_time_lfp_corr = datetime.now()
+    elapsed_time_lfp_corr = end_time_lfp_corr - start_time_lfp_corr
+    logging.info(
+        "Elapsed time for lfp correlation:"
+        f"{elapsed_time_lfp_corr.total_seconds():.6f} seconds"
+    )
+
+
 def process_raw_data(
     main_recording: si.BaseRecording,
     recording_combined: Union[si.BaseRecording, None],
@@ -951,6 +1113,9 @@ def process_raw_data(
     results_folder: str,
     is_lfp: bool,
     target_freq_resolution_psd: float,
+    chunk_duration: float,
+    lfp_correlation_min_secs: int,
+    lfp_correlation_num_bins: int,
 ):
     """
     Processes raw data for a given stream by computing RMS and (if applicable)
@@ -982,6 +1147,18 @@ def process_raw_data(
     target_freq_resolution_psd: float
         Target frequency resolution for PSD in Hz
 
+    chunk_duration : float
+        Chunk length (in seconds) used for
+        lazy loading and processingof continuous data.
+        Longer chunks improve stability for
+        low-frequency (LFP) filtering and spectral estimates.
+
+    lfp_correlation_min_secs : int
+        Duration (seconds) of data used for LFP correlation.
+
+    lfp_correlation_num_bins : int
+        Number of bins used to compute LFP correlation.
+
     """
     probe_name = _stream_to_probe_name(stream_name)
     output_folder = Path(results_folder) / probe_name
@@ -998,8 +1175,22 @@ def process_raw_data(
             recording_combined,
             output_folder,
             target_freq_resolution_psd,
+            chunk_duration,
             is_lfp=is_lfp,
         )
+
+        if is_lfp:
+            logging.info(
+                "Running LFP correlation band generation "
+                f"on concatenated recording for stream {stream_name}"
+            )
+
+            save_lfp_correlation(
+                recording_combined,
+                output_folder,
+                lfp_correlation_min_secs,
+                lfp_correlation_num_bins,
+            )
 
     if recording_combined is not None:
         # need appended channel locations
@@ -1017,18 +1208,36 @@ def process_raw_data(
         "Running RMS and LFP spectrum (if LFP stream) "
         f"on main recording for stream {stream_name}"
     )
+
+    tag = "" if recording_combined is None else "Main"
     save_rms_and_lfp_spectrum(
         main_recording,
         output_folder,
         target_freq_resolution_psd,
+        chunk_duration,
         is_lfp=is_lfp,
-        tag="Main",
+        tag=tag,
     )
+
+    if is_lfp:
+        logging.info(
+            "Running LFP correlation band generation "
+            f"on main recording for stream {stream_name}"
+        )
+
+        save_lfp_correlation(
+            main_recording,
+            output_folder,
+            lfp_correlation_min_secs,
+            lfp_correlation_num_bins,
+            tag=tag,
+        )
 
 
 def extract_continuous(
     sorting_folder: Path,
     results_folder: Path,
+    stream_to_use: Union[str, None] = None,
     main_recording_min_secs: int = 600,
     probe_surface_finding: Union[Path, None] = None,
     lfp_freq_min: float = 1,
@@ -1036,6 +1245,10 @@ def extract_continuous(
     num_parallel_jobs: int = 10,
     target_sample_rate: float = 1250,
     target_freq_resolution_psd: float = 0.5,
+    chunk_duration: float = 15.0,
+    lfp_correlation_min_secs: int = 600,
+    lfp_correlation_num_bins: int = 5,
+    lfp_bandpass_margin_ms: float = 3000.0,
 ):
     """
     Extract features from raw data
@@ -1054,6 +1267,10 @@ def extract_continuous(
         data will be saved. The extracted signals
         will be written to files within this directory,
         typically in formats suitable for further analysis.
+
+    stream_to_use: Union[str, None] = None,
+        If provided, this will execute only on the stream passed in
+        for this parameter. Else, all streams will be processed
 
     main_recording_min_secs : int, optional, default=600
         Minimum duration (in seconds) separating main from surface recordings.
@@ -1083,6 +1300,22 @@ def extract_continuous(
 
     target_freq_resolution_psd: float, default = 0.5
         Target frequency resolution for PSD in Hz
+
+    chunk_duration : float, default=15.0
+        Chunk length (in seconds) used for
+        lazy loading and processingof continuous data.
+        Longer chunks improve stability for
+        low-frequency (LFP) filtering and spectral estimates.
+
+    lfp_correlation_min_secs : int, default = 600
+        Duration (seconds) of data used for LFP correlation.
+
+    lfp_correlation_num_bins : int, default = 10
+        Number of bins used to compute LFP correlation.
+
+    lfp_bandpass_margin_ms: float = 3000
+        Padding (in ms) added to each chunk before bandpass filtering
+        to reduce edge artifacts.
     """
 
     session_folder = Path(str(sorting_folder).split("_sorted")[0])
@@ -1091,6 +1324,11 @@ def extract_continuous(
     neuropix_streams, ecephys_compressed_folder, num_blocks = (
         get_ecephys_stream_names(session_folder)
     )
+    if stream_to_use is not None:
+        logging.info(
+            "Stream name provided as parameter. Will only process "
+            f"{stream_to_use}"
+        )
     # surface recording is a seperate asset,
     # identified by probe_surface_finding
     neuropix_streams_surface = []
@@ -1110,6 +1348,7 @@ def extract_continuous(
         neuropix_streams,
         num_blocks,
         ecephys_compressed_folder,
+        stream_to_use=stream_to_use,
         main_recording_min_secs=main_recording_min_secs,
         freq_min=lfp_freq_min,
         freq_max=lfp_freq_max,
@@ -1127,6 +1366,7 @@ def extract_continuous(
             neuropix_streams_surface,
             num_blocks,
             ecephys_compressed_folder_surface,
+            stream_to_use=stream_to_use,
             main_recording_min_secs=main_recording_min_secs,
             freq_min=lfp_freq_min,
             freq_max=lfp_freq_max,
@@ -1135,21 +1375,22 @@ def extract_continuous(
 
         # combine this with mappings above for
         # seperate surface finding asset
-        main_recordings_ap = _merge_main_and_surface_recording_dicts(
+        main_recordings_ap = _merge_separate_asset_recording_dicts(
             main_recordings_ap, main_recordings_separate_ap
         )
-        surface_recordings_ap = _merge_main_and_surface_recording_dicts(
+        surface_recordings_ap = _merge_separate_asset_recording_dicts(
             surface_recordings_ap, surface_recordings_separate_ap
         )
-        main_recordings_lfp = _merge_main_and_surface_recording_dicts(
+        main_recordings_lfp = _merge_separate_asset_recording_dicts(
             main_recordings_lfp, main_recordings_separate_lfp
         )
-        surface_recordings_lfp = _merge_main_and_surface_recording_dicts(
+        surface_recordings_lfp = _merge_separate_asset_recording_dicts(
             surface_recordings_lfp, surface_separate_recordings_lfp
         )
 
     logging.info(
         "Looking at AP recordings, "
+        f"{tuple(main_recordings_ap.keys())}"
         "will concatenate if surface recordings are present"
     )
     for stream_name_ap in main_recordings_ap:
@@ -1183,10 +1424,14 @@ def extract_continuous(
             results_folder,
             is_lfp=False,
             target_freq_resolution_psd=target_freq_resolution_psd,
+            chunk_duration=chunk_duration,
+            lfp_correlation_min_secs=lfp_correlation_min_secs,
+            lfp_correlation_num_bins=lfp_correlation_num_bins,
         )
 
     logging.info(
         "Looking at LFP recordings "
+        f"{tuple(main_recordings_lfp.keys())}"
         "will concatenate if surface recordings are present"
     )
     for stream_name_lfp in main_recordings_lfp:
@@ -1222,4 +1467,7 @@ def extract_continuous(
             results_folder,
             is_lfp=True,
             target_freq_resolution_psd=target_freq_resolution_psd,
+            chunk_duration=chunk_duration,
+            lfp_correlation_min_secs=lfp_correlation_min_secs,
+            lfp_correlation_num_bins=lfp_correlation_num_bins,
         )

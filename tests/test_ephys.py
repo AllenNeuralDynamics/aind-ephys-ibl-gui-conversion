@@ -13,7 +13,7 @@ from spikeinterface.extractors import toy_example
 
 from aind_ephys_ibl_gui_conversion.ephys import (
     _stream_to_probe_name,
-    _merge_main_and_surface_recording_dicts,
+    _merge_separate_asset_recording_dicts,
     get_concatenated_recordings,
     get_largest_segment_recordings,
     get_main_recording_from_list,
@@ -37,7 +37,7 @@ class TestMergeMainAndSurfaceRecordingDicts(unittest.TestCase):
         d1 = defaultdict(list, {"probeA": [1, 2]})
         d2 = defaultdict(list, {"probeA": [3]})
 
-        merged = _merge_main_and_surface_recording_dicts(d1, d2)
+        merged = _merge_separate_asset_recording_dicts(d1, d2)
 
         self.assertEqual(merged["probeA"], [1, 2, 3])
 
@@ -51,7 +51,7 @@ class TestMergeMainAndSurfaceRecordingDicts(unittest.TestCase):
         d1 = defaultdict(list, {"probeA": [1]})
         d2 = defaultdict(list, {"probeB": [2]})
 
-        merged = _merge_main_and_surface_recording_dicts(d1, d2)
+        merged = _merge_separate_asset_recording_dicts(d1, d2)
 
         self.assertEqual(merged["probeA"], [1])
         self.assertEqual(merged["probeB"], [2])
@@ -64,7 +64,7 @@ class TestMergeMainAndSurfaceRecordingDicts(unittest.TestCase):
         d1 = defaultdict(list, {"probeA": [1, 2]})
         d2 = defaultdict(list, {"probeA": [3]})
 
-        merged = _merge_main_and_surface_recording_dicts(d1, d2)
+        merged = _merge_separate_asset_recording_dicts(d1, d2)
         union = d1 | d2
 
         self.assertEqual(merged["probeA"], [1, 2, 3])
@@ -80,7 +80,7 @@ class TestMergeMainAndSurfaceRecordingDicts(unittest.TestCase):
         d1 = defaultdict(list)
         d2 = defaultdict(list)
 
-        merged = _merge_main_and_surface_recording_dicts(d1, d2)
+        merged = _merge_separate_asset_recording_dicts(d1, d2)
 
         self.assertIs(merged.default_factory, list)
 
@@ -314,6 +314,9 @@ class TestExtractContinuous(unittest.TestCase):
             main_recording=self.rec_ap,
             recording_combined=None,
             target_freq_resolution_psd=0.5,
+            chunk_duration=3,
+            lfp_correlation_min_secs=10,
+            lfp_correlation_num_bins=3,
             stream_name="Record Node 104#Neuropix-PXI-100.ProbeA-AP",
             results_folder=self.tmpdir,
             is_lfp=False,
