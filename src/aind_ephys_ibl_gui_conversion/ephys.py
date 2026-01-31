@@ -1064,28 +1064,40 @@ def save_lfp_correlation(
     logging.info(
         f"Found list of frames to compute correlation {time_frames_rec}"
     )
-    # calculate lfp correlation
-    for index in range(len(time_frames_rec) - 1):
-        for band, (low_f, high_f) in bands.items():
-            # bandpass
-            D_band = bandpass_filtered_recordings[(band, (low_f, high_f))]
-            # correlation across channels
-            corr_matrix = np.corrcoef(
-                D_band.get_traces(
+    # ------------------------------------------------------------------
+    # Compute correlations
+    # ------------------------------------------------------------------
+    for band, D_band_recording in bandpass_filtered_recordings.items():
+        per_group_corrs = []
+
+        # split by shank
+        for recording_group in D_band_recording.split_by("group"):
+            corr_bins = []
+
+            for index in range(len(time_frames_rec) - 1):
+                traces = recording_group.get_traces(
                     start_frame=time_frames_rec[index],
                     end_frame=time_frames_rec[index + 1],
-                ).T
-            )
-            logging.info(
-                f"Processing LFP correlation for band {band}"
-                f"across frames {time_frames_rec[index]} "
-                f"to {time_frames_rec[index + 1]}"
-            )
-            band_corrs[band].append(corr_matrix)
+                )
 
-    # average across windows
-    for band in band_corrs:
-        band_corrs[band] = np.nanmean(np.stack(band_corrs[band]), axis=0)
+                logging.info(
+                    f"Processing LFP correlation for band {band} "
+                    f"group {recording_group} "
+                    f"frames {time_frames_rec[index]} "
+                    f"to {time_frames_rec[index + 1]}"
+                )
+                corr_matrix = np.corrcoef(traces.T)
+                corr_bins.append(corr_matrix)
+
+
+            # average across time bins for this shank
+            mean_corr = np.nanmean(np.stack(corr_bins), axis=0)
+            per_group_corrs.append(mean_corr)
+
+        # ------------------------------------------------------------------
+        # Concatenate shanks → one big matrix for GUI
+        # ------------------------------------------------------------------
+        band_corrs[band] = scipy.linalg.block_diag(*per_group_corrs)
 
     # gui requires this folder
     folder_to_save = output_folder / "band_corr"
