@@ -11,6 +11,7 @@ from typing import DefaultDict, List, TypeVar, Union
 
 import numpy as np
 import pandas as pd
+import scipy
 import spikeinterface as si
 import spikeinterface.extractors as se
 import spikeinterface.preprocessing as spre
@@ -1069,9 +1070,13 @@ def save_lfp_correlation(
     # ------------------------------------------------------------------
     for band, (low_f, high_f) in bands.items():
         per_group_corrs = []
-        D_band_recording = bandpass_filtered_recordings[(band, (low_f, high_f))]
+        D_band_recording = bandpass_filtered_recordings[
+            (band, (low_f, high_f))
+        ]
         # split by shank
-        for recording_group in D_band_recording.split_by("group", outputs="list"):
+        for recording_group in D_band_recording.split_by(
+            "group", outputs="list"
+        ):
             corr_bins = []
 
             for index in range(len(time_frames_rec) - 1):
@@ -1088,7 +1093,6 @@ def save_lfp_correlation(
                 )
                 corr_matrix = np.corrcoef(traces.T)
                 corr_bins.append(corr_matrix)
-
 
             # average across time bins for this shank
             mean_corr = np.nanmean(np.stack(corr_bins), axis=0)
