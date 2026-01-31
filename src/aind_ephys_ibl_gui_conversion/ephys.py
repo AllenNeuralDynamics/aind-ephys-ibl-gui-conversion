@@ -1067,9 +1067,9 @@ def save_lfp_correlation(
     # ------------------------------------------------------------------
     # Compute correlations
     # ------------------------------------------------------------------
-    for band, D_band_recording in bandpass_filtered_recordings.items():
+    for band, (low_f, high_f) in bands.items():
         per_group_corrs = []
-
+        D_band_recording = bandpass_filtered_recordings[(band, (low_f, high_f))]
         # split by shank
         for recording_group in D_band_recording.split_by("group"):
             corr_bins = []
