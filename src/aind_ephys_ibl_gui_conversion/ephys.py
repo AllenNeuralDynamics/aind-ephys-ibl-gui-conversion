@@ -582,10 +582,7 @@ def process_lfp_stream(
             recording_lfp_bandpass, decimation_factor=decimation_factor
         )
 
-    logging.info("Applying cmr to lfp recording")
-    return spre.common_reference(
-        recording_lfp, reference="global", operator="median"
-    )
+    return recording_lfp
 
 
 def get_neuropixel_lfp_stream(
@@ -810,6 +807,12 @@ def save_rms_and_lfp_spectrum(
         f"and using number of parallel jobs {n_jobs}"
     )
     start_time_rms = datetime.now()
+    if is_lfp:
+        logging.info("Applying cmr for lfp rms and spectrum")
+        recording = spre.common_reference(
+            recording, reference="global", operator="median"
+        )
+
     rms, rms_times = compute_rms(
         recording, chunk_duration=chunk_duration, n_jobs=n_jobs
     )
@@ -1078,9 +1081,12 @@ def save_lfp_correlation(
             "group", outputs="list"
         ):
             corr_bins = []
-
+            logging.info("Applying cmr for lfp correlation")
+            recording_group_cmr = spre.common_reference(
+                recording_group, reference="global", operator="median"
+            )
             for index in range(len(time_frames_rec) - 1):
-                traces = recording_group.get_traces(
+                traces = recording_group_cmr.get_traces(
                     start_frame=time_frames_rec[index],
                     end_frame=time_frames_rec[index + 1],
                 )
