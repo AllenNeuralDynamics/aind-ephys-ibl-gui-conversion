@@ -582,7 +582,11 @@ def process_lfp_stream(
             recording_lfp_bandpass, decimation_factor=decimation_factor
         )
 
-    return recording_lfp
+    logging.info("Applying cmr for lfp stream")
+    recording_lfp_cmr = spre.common_reference(
+        recording_lfp, reference="global", operator="median"
+    )
+    return recording_lfp_cmr
 
 
 def get_neuropixel_lfp_stream(
@@ -1072,19 +1076,16 @@ def save_lfp_correlation(
     # Compute correlations
     # ------------------------------------------------------------------
     for band, (low_f, high_f) in bands.items():
-        per_group_corrs = []
         D_band_recording = bandpass_filtered_recordings[
             (band, (low_f, high_f))
         ]
         # split by shank
+        shank_index = 0
         for recording_group in D_band_recording.split_by(
             "group", outputs="list"
         ):
             corr_bins = []
-            logging.info("Applying cmr for lfp correlation")
-            recording_group_cmr = spre.common_reference(
-                recording_group, reference="global", operator="median"
-            )
+            
             for index in range(len(time_frames_rec) - 1):
                 traces = recording_group_cmr.get_traces(
                     start_frame=time_frames_rec[index],
@@ -1102,23 +1103,24 @@ def save_lfp_correlation(
 
             # average across time bins for this shank
             mean_corr = np.nanmean(np.stack(corr_bins), axis=0)
-            per_group_corrs.append(mean_corr)
+            band_corrs[f"{band}_shank{shank_index}"] = mean_corr
+            shank_index += 1
 
-        # ------------------------------------------------------------------
-        # Concatenate shanks → one big matrix for GUI
-        # ------------------------------------------------------------------
-        band_corrs[band] = scipy.linalg.block_diag(*per_group_corrs)
 
     # gui requires this folder
     folder_to_save = output_folder / "band_corr"
     folder_to_save.mkdir(exist_ok=True)
     logging.info(f"Saving LFP correlation to folder {folder_to_save}")
     if tag is None:
-        for band, corr in band_corrs.items():
-            np.save(folder_to_save / f"{band}_mean_corr.npy", corr)
+        for band_key, corr in band_corrs.items():
+            band = band_key.split("_")[0]
+            shank = band_key.split("_")[1]
+            np.save(folder_to_save / f"{band}_{shank}_mean_corr.npy", corr)
     else:
-        for band, corr in band_corrs.items():
-            np.save(folder_to_save / f"{band}_{tag}_mean_corr.npy", corr)
+        for band_key, corr in band_corrs.items():
+            band = band_key.split("_")[0]
+            shank = band_key.split("_")[1]
+            np.save(folder_to_save / f"{band}_{shank}_{tag}_mean_corr.npy", corr)
 
     end_time_lfp_corr = datetime.now()
     elapsed_time_lfp_corr = end_time_lfp_corr - start_time_lfp_corr
