@@ -11,7 +11,6 @@ from typing import DefaultDict, List, TypeVar, Union
 
 import numpy as np
 import pandas as pd
-import scipy
 import spikeinterface as si
 import spikeinterface.extractors as se
 import spikeinterface.preprocessing as spre
@@ -1085,9 +1084,9 @@ def save_lfp_correlation(
             "group", outputs="list"
         ):
             corr_bins = []
-            
+
             for index in range(len(time_frames_rec) - 1):
-                traces = recording_group_cmr.get_traces(
+                traces = recording_group.get_traces(
                     start_frame=time_frames_rec[index],
                     end_frame=time_frames_rec[index + 1],
                 )
@@ -1106,7 +1105,6 @@ def save_lfp_correlation(
             band_corrs[f"{band}_shank{shank_index}"] = mean_corr
             shank_index += 1
 
-
     # gui requires this folder
     folder_to_save = output_folder / "band_corr"
     folder_to_save.mkdir(exist_ok=True)
@@ -1120,7 +1118,9 @@ def save_lfp_correlation(
         for band_key, corr in band_corrs.items():
             band = band_key.split("_")[0]
             shank = band_key.split("_")[1]
-            np.save(folder_to_save / f"{band}_{shank}_{tag}_mean_corr.npy", corr)
+            np.save(
+                folder_to_save / f"{band}_{shank}_{tag}_mean_corr.npy", corr
+            )
 
     end_time_lfp_corr = datetime.now()
     elapsed_time_lfp_corr = end_time_lfp_corr - start_time_lfp_corr
