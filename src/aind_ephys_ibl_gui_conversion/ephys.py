@@ -1052,7 +1052,7 @@ def save_lfp_correlation(
         "gamma": [100, 300],
     }
 
-    band_corrs = {band: [] for band in bands}
+    band_corrs = {}
     bandpass_filtered_recordings = {}
     for band, (low_f, high_f) in bands.items():
         margin_ms = (1 / low_f) * 3 * 1000
