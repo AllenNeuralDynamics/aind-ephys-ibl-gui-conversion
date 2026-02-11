@@ -810,12 +810,6 @@ def save_rms_and_lfp_spectrum(
         f"and using number of parallel jobs {n_jobs}"
     )
     start_time_rms = datetime.now()
-    if is_lfp:
-        logging.info("Applying cmr for lfp rms and spectrum")
-        recording = spre.common_reference(
-            recording, reference="global", operator="median"
-        )
-
     rms, rms_times = compute_rms(
         recording, chunk_duration=chunk_duration, n_jobs=n_jobs
     )
