@@ -1077,6 +1077,8 @@ def save_lfp_correlation(
         for recording_group in D_band_recording.split_by(
             "group", outputs="list"
         ):
+            channel_locations = recording_group.get_channel_locations()
+            channel_order = np.argsort(channel_locations[:, 1])
             corr_bins = []
 
             for index in range(len(time_frames_rec) - 1):
@@ -1084,6 +1086,7 @@ def save_lfp_correlation(
                     start_frame=time_frames_rec[index],
                     end_frame=time_frames_rec[index + 1],
                 )
+                traces = traces[:, channel_order]
 
                 logging.info(
                     f"Processing LFP correlation for band {band} "
