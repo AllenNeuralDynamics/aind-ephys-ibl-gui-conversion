@@ -1073,7 +1073,7 @@ def save_lfp_correlation(
             (band, (low_f, high_f))
         ]
         # split by shank
-        shank_index = 0
+        shank_index = 1
         for recording_group in D_band_recording.split_by(
             "group", outputs="list"
         ):
