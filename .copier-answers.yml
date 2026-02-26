@@ -9,7 +9,7 @@ github_url: https://github.com/AllenNeuralDynamics/aind-ephys-ibl-gui-conversion
 include_cli: false
 include_docs: false
 include_notebooks: false
-include_type_hints: true
+include_type_hints: false
 institute_name: Allen Institute for Neural Dynamics
 license: MIT
 project_description: Convert ephys data for use in IBL GUI

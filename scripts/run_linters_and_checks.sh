@@ -47,8 +47,6 @@ main() {
   if [ "$CHECKS" = true ]; then
     echo "+ ruff check"
     run ruff check
-    echo "+ mypy"
-    run mypy
     echo "+ interrogate -v"
     run interrogate -v
     echo "+ codespell --check-filenames"

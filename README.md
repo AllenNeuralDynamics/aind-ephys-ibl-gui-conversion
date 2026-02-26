@@ -33,7 +33,6 @@ Or run individual commands:
 ```bash
 uv run --frozen ruff format          # Code formatting
 uv run --frozen ruff check           # Linting
-uv run --frozen mypy                 # Type checking
 uv run --frozen interrogate -v       # Documentation coverage
 uv run --frozen codespell --check-filenames  # Spell checking
 uv run --frozen pytest --cov aind_ephys_ibl_gui_conversion # Tests with coverage

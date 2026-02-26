@@ -620,7 +620,7 @@ def get_neuropixel_lfp_stream(
           Neuropixels 1.0 (`True`)
           or Neuropixels 2.0 (`False`).
     """
-    if "AP" in stream_name:  # 1.0 probe - seperate stream
+    if "AP" in stream_name:  # 1.0 probe - separate stream
         stream_name_lfp = stream_name.replace("AP", "LFP")
         recording_lfp = si.read_zarr(
             ecephys_compressed_folder
@@ -1002,7 +1002,7 @@ def save_lfp_correlation(
 ):
     """
     Saves LFP correlation arrays for frequency bands
-    to the specfied output folder.
+    to the specified output folder.
 
     Correlation is done for delta, theta, alpha, beta,
     and gamma frequency bands.
@@ -1299,7 +1299,7 @@ def extract_continuous(
         filtering of the data based on probe configuration.
         If not provided, no surface finding data will be used.
 
-    lfp_freq_min: float, defaut = 1,
+    lfp_freq_min: float, default = 1,
         The min cutoff frequency to low pass filter
         LFP recording
 
@@ -1344,7 +1344,7 @@ def extract_continuous(
             "Stream name provided as parameter. Will only process "
             f"{stream_to_use}"
         )
-    # surface recording is a seperate asset,
+    # surface recording is a separate asset,
     # identified by probe_surface_finding
     neuropix_streams_surface = []
     if probe_surface_finding is not None:
@@ -1371,7 +1371,7 @@ def extract_continuous(
     )
     if (
         len(neuropix_streams_surface) > 0
-    ):  # a seperate asset has been provided for surface recording
+    ):  # a separate asset has been provided for surface recording
         (
             main_recordings_separate_ap,
             surface_recordings_separate_ap,
@@ -1389,7 +1389,7 @@ def extract_continuous(
         )
 
         # combine this with mappings above for
-        # seperate surface finding asset
+        # separate surface finding asset
         main_recordings_ap = _merge_separate_asset_recording_dicts(
             main_recordings_ap, main_recordings_separate_ap
         )

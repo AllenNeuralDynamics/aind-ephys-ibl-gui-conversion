@@ -81,11 +81,11 @@ def bp(ts, si, b, axis=None):
     """
     Band-pass filter in frequency domain
 
-    :param ts: time serie
+    :param ts: time series
     :param si: sampling interval in seconds
     :param b: cutout frequencies: 4 elements vector or list
     :param axis: axis along which to perform reduction (last axis by default)
-    :return: filtered time serie
+    :return: filtered time series
     """
     return _freq_filter(ts, si, b, axis=axis, typ="bp")
 
@@ -94,11 +94,11 @@ def lp(ts, si, b, axis=None):
     """
     Low-pass filter in frequency domain
 
-    :param ts: time serie
+    :param ts: time series
     :param si: sampling interval in seconds
     :param b: cutout frequencies: 2 elements vector or list
     :param axis: axis along which to perform reduction (last axis by default)
-    :return: filtered time serie
+    :return: filtered time series
     """
     return _freq_filter(ts, si, b, axis=axis, typ="lp")
 
@@ -107,11 +107,11 @@ def hp(ts, si, b, axis=None):
     """
     High-pass filter in frequency domain
 
-    :param ts: time serie
+    :param ts: time series
     :param si: sampling interval in seconds
     :param b: cutout frequencies: 2 elements vector or list
     :param axis: axis along which to perform reduction (last axis by default)
-    :return: filtered time serie
+    :return: filtered time series
     """
     return _freq_filter(ts, si, b, axis=axis, typ="hp")
 

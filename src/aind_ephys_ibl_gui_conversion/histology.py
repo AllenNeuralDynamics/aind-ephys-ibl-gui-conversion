@@ -170,7 +170,7 @@ def __read_zarr_image(image_path):
 
 def check_orientation(img: np.array, params: dict, orientations: dict):
     """
-    Checks aquisition orientation an makes sure it is aligned to the CCF. The
+    Checks acquisition orientation an makes sure it is aligned to the CCF. The
     CCF orientation is:
         - superior_to_inferior
         - left_to_right
@@ -179,7 +179,7 @@ def check_orientation(img: np.array, params: dict, orientations: dict):
     Parameters
     ----------
     img : np.array
-        The raw image in its aquired orientatin
+        The raw image in its acquired orientatin
     params : dict
         The orientation information from processing_manifest.json
     orientations: dict
@@ -207,7 +207,7 @@ def check_orientation(img: np.array, params: dict, orientations: dict):
             acronym[dim] = direction[0]
 
     # check because there was a bug that allowed for invalid spl orientation
-    # all vals should be postitive so just taking absolute value of matrix
+    # all vals should be positive so just taking absolute value of matrix
     if "".join(acronym) == "spl":
         orient_mat = abs(orient_mat)
 

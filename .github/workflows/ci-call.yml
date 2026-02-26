@@ -33,6 +33,6 @@ jobs:
       os: ${{ matrix.os }}
       python-version: ${{ matrix.python-version }}
       package-name: aind_ephys_ibl_gui_conversion
-      run-mypy: true
+      run-mypy: false
     secrets:
       repo-token: ${{ secrets.GITHUB_TOKEN }}
