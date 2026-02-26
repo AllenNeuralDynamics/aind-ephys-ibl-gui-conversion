@@ -1,20 +1,23 @@
 [build-system]
-requires = ["setuptools", "setuptools-scm"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "aind-ephys-ibl-gui-conversion"
-description = "Generated from aind-library-template"
-license = {text = "MIT"}
-requires-python = ">=3.9"
+description = "Convert ephys data for use in IBL GUI"
+license = "MIT"
+requires-python = ">=3.10"
 authors = [
-    {name = "Allen Institute for Neural Dynamics"}
+  { name = "Allen Institute for Neural Dynamics" },
+  { name = "Arjun Sridhar", email = "arjun.sridhar1998@gmail.com" },
+  { name = "yonibrowning", email = "yonib@uw.edu" },
+  { name = "Ben Hardcastle", email = "ben.hardcastle@alleninstitute.org" },
+  { name = "alakunina", email = "alakunina@gmail.com" },
+  { name = "Galen Lynch", email = "galen@galenlynch.com" },
 ]
-classifiers = [
-    "Programming Language :: Python :: 3"
-]
+classifiers = ["Programming Language :: Python :: 3"]
 readme = "README.md"
-dynamic = ["version"]
+version = "0.1.0"
 
 dependencies = [
     "aind-mri-utils",
@@ -27,65 +30,61 @@ dependencies = [
     "numpy",
 ]
 
-[project.optional-dependencies]
-dev = [
-    'black',
-    'coverage',
-    'flake8',
-    'interrogate',
-    'isort',
-    'Sphinx',
-    'furo'
-]
+[project.urls]
+Repository = "https://github.com/AllenNeuralDynamics/aind-ephys-ibl-gui-conversion/"
+Issues = "https://github.com/AllenNeuralDynamics/aind-ephys-ibl-gui-conversion/issues"
+Changelog = "https://github.com/AllenNeuralDynamics/aind-ephys-ibl-gui-conversion/blob/main/CHANGELOG.md"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[dependency-groups]
+types = ["mypy"]
+dev = [{ include-group = "types" }, "codespell", "pytest", "pytest-cov", "ruff", "interrogate"]
+jupyter = [{ include-group = "dev" }, "ipykernel", "pip"]
 
-#[tool.setuptools.dynamic]
-#version = {attr = "aind-ephys-ibl-gui-conversion.__version__"}
-
-[tool.black]
-line-length = 79
-target_version = ['py310']
-exclude = '''
-
-(
-  /(
-      \.eggs         # exclude a few common directories in the
-    | \.git          # root of the project
-    | \.hg
-    | \.mypy_cache
-    | \.tox
-    | \.venv
-    | _build
-    | build
-    | dist
-  )/
-  | .gitignore
-)
-'''
+[tool.hatch.build.targets.wheel]
+packages = ["src/aind_ephys_ibl_gui_conversion"]
 
 [tool.ruff]
 line-length = 79
-target-version = 'py310'
+target-version = "py310"
 
-[tool.coverage.run]
-omit = ["*__init__*"]
-source = ["aind-ephys-ibl-gui-conversion", "tests"]
+[tool.ruff.lint]
+extend-select = ["Q", "RUF100", "C90", "I", "F", "E", "W", "UP", "PYI"]
+mccabe = { max-complexity = 14 }
 
-[tool.coverage.report]
-exclude_lines = [
-    "if __name__ == .__main__.:",
-    "from",
-    "import",
-    "pragma: no cover"
-]
-fail_under = 100
+[tool.codespell]
+skip = ".git,*.pdf,*.svg,./docs/_build,uv.lock"
 
-[tool.isort]
-line_length = 79
-profile = "black"
+[tool.pytest.ini_options]
+addopts = "--strict-markers --tb=short --cov=src --cov-report=term-missing --cov-fail-under=0"
+testpaths = ["tests"]
 
 [tool.interrogate]
-exclude = ["setup.py", "docs", "build"]
+ignore-init-method = true
+ignore-magic = true
+ignore_module = true
 fail-under = 100
+exclude = [
+  "__init__.py",
+  "tests",
+  "docs",
+  "build",
+  "examples",
+  "site",
+]
+
+[tool.commitizen]
+version_provider = "pep621"
+update_changelog_on_bump = true
+tag_format = "v$version"
+major_version_zero = true
+
+[tool.mypy]
+files = ["src/aind_ephys_ibl_gui_conversion"]
+strict = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+

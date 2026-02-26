@@ -1,6 +1,7 @@
 """
 Functions to process histology
 """
+
 import json
 import os
 
@@ -88,7 +89,8 @@ def projected_onto_line(points, line_N, line_P):
                              Shape (n_dimensions,).
         line_P (np.ndarray): A point on the line. Shape (n_dimensions,).
 
-    Returns:
+    Returns
+    -------
         np.ndarray: An array of projected points.
                     Shape (n_points, n_dimensions).
 
@@ -126,19 +128,16 @@ def read_json_as_dict(filepath: str):
     Reads a json as dictionary.
 
     Parameters
-    ------------------------
-
+    ----------
     filepath: PathLike
         Path where the json is located.
 
     Returns
-    ------------------------
-
+    -------
     dict:
         Dictionary with the data the json has.
 
     """
-
     dictionary = {}
 
     if os.path.exists(filepath):
@@ -153,12 +152,12 @@ def __read_zarr_image(image_path):
     Reads a zarr image
 
     Parameters
-    -------------
+    ----------
     image_path: PathLike
         Path where the zarr image is located
 
     Returns
-    -------------
+    -------
     np.array
         Numpy array with the zarr image
     """
@@ -171,7 +170,7 @@ def __read_zarr_image(image_path):
 
 def check_orientation(img: np.array, params: dict, orientations: dict):
     """
-    Checks aquisition orientation an makes sure it is aligned to the CCF. The
+    Checks acquisition orientation an makes sure it is aligned to the CCF. The
     CCF orientation is:
         - superior_to_inferior
         - left_to_right
@@ -180,7 +179,7 @@ def check_orientation(img: np.array, params: dict, orientations: dict):
     Parameters
     ----------
     img : np.array
-        The raw image in its aquired orientatin
+        The raw image in its acquired orientatin
     params : dict
         The orientation information from processing_manifest.json
     orientations: dict
@@ -191,7 +190,6 @@ def check_orientation(img: np.array, params: dict, orientations: dict):
     img_out : np.array
         The raw image oriented to the CCF
     """
-
     orient_mat = np.zeros((3, 3))
     acronym = ["", "", ""]
 
@@ -209,7 +207,7 @@ def check_orientation(img: np.array, params: dict, orientations: dict):
             acronym[dim] = direction[0]
 
     # check because there was a bug that allowed for invalid spl orientation
-    # all vals should be postitive so just taking absolute value of matrix
+    # all vals should be positive so just taking absolute value of matrix
     if "".join(acronym) == "spl":
         orient_mat = abs(orient_mat)
 
@@ -230,7 +228,6 @@ def get_highest_level_info(filepath, return_order="xyz"):
     """
     Gets the highest level information
     """
-
     with open(os.path.join(filepath, ".zattrs")) as f:
         metadata = json.load(f)
 

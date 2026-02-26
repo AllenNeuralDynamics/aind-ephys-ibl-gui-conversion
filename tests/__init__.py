@@ -1,1 +1,1 @@
-"""Testing library"""
+"""Tests package."""
