@@ -7,7 +7,7 @@ import re
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import DefaultDict, List, TypeVar, Union
+from typing import TypeVar
 
 import numpy as np
 import pandas as pd
@@ -24,9 +24,9 @@ T = TypeVar("T")
 
 
 def _merge_separate_asset_recording_dicts(
-    d1: DefaultDict[str, list[T]],
-    d2: DefaultDict[str, list[T]],
-) -> DefaultDict[str, list[T]]:
+    d1: defaultdict[str, list[T]],
+    d2: defaultdict[str, list[T]],
+) -> defaultdict[str, list[T]]:
     """
     Merge recordings when surface ephys
     is recorded as a separate data asset.
@@ -107,7 +107,7 @@ def _stream_to_probe_name(stream_name: str) -> str | None:
 def extract_spikes(  # noqa: C901
     sorting_folder: Path,
     results_folder: Path,
-    stream_to_use: Union[str, None] = None,
+    stream_to_use: str | None = None,
     min_duration_secs: int = 300,
 ):
     """
@@ -145,7 +145,6 @@ def extract_spikes(  # noqa: C901
         The extracted spike data is saved directly to
         the `results_folder`.
     """
-
     session_folder = Path(str(sorting_folder).split("_sorted")[0])
     scratch_folder = Path("/scratch")
 
@@ -418,7 +417,6 @@ def remove_overlapping_channels(recordings) -> list[si.BaseRecording]:
         A list of `BaseRecording` objects that
         do not have any overlapping channels.
     """
-
     removed_recordings = []
     channel_locations_seen = set()
     for ii, recording in enumerate(recordings):
@@ -482,7 +480,6 @@ def get_ecephys_stream_names(base_folder: Path) -> tuple[list[str], Path, int]:
     - The list of stream names may correspond to
       experimental data streams or other related datasets.
     """
-
     # At some point the directory structure changed- handle different cases.
     ecephys_folder = base_folder / "ecephys_clipped"
     if ecephys_folder.is_dir():
@@ -643,7 +640,7 @@ def get_stream_mappings(
     neuropix_streams: list,
     num_blocks: int,
     ecephys_compressed_folder: Path,
-    stream_to_use: Union[str, None] = None,
+    stream_to_use: str | None = None,
     main_recording_min_secs: int = 600,
     freq_min: float = 1,
     freq_max: float = 300,
@@ -771,7 +768,7 @@ def save_rms_and_lfp_spectrum(
     chunk_duration: float,
     n_jobs: int = 10,
     is_lfp: bool = False,
-    tag: Union[str, None] = None,
+    tag: str | None = None,
 ) -> None:
     """
     Saves rms and lfp spectrum for the given recording
@@ -820,8 +817,7 @@ def save_rms_and_lfp_spectrum(
     end_time_rms = datetime.now()
     elapsed_time_rms = end_time_rms - start_time_rms
     logging.info(
-        "Elapsed time for rms:"
-        f"{elapsed_time_rms.total_seconds():.6f} seconds"
+        f"Elapsed time for rms:{elapsed_time_rms.total_seconds():.6f} seconds"
     )
 
     tag = tag if tag is not None else ""
@@ -887,8 +883,8 @@ def save_rms_and_lfp_spectrum(
 
 
 def get_largest_segment_recordings(
-    recordings: List[si.BaseRecording],
-) -> List[si.BaseRecording]:
+    recordings: list[si.BaseRecording],
+) -> list[si.BaseRecording]:
     """
     Return recordings containing only the segment
     with the largest number of samples.
@@ -947,7 +943,6 @@ def get_concatenated_recordings(
         A concatenated recording extractor containing all main and surface
         recordings (with overlapping channels removed and durations aligned).
     """
-
     min_samples = min(
         [recording.get_num_samples() for recording in surface_recordings]
     )
@@ -983,11 +978,11 @@ def get_main_recording_from_list(
     recordings: list[si.BaseRecording]
         The list of recordings
 
-    Returns:
+    Returns
+    -------
     si.BaseRecording
         The recording with the largest number of samples
     """
-
     if len(recordings) > 1:
         logging.warning(
             "Multiple main recordings of "
@@ -1003,7 +998,7 @@ def save_lfp_correlation(
     output_folder: Path,
     lfp_correlation_min_secs: int,
     lfp_correlation_num_bins: int,
-    tag: Union[str, None] = None,
+    tag: str | None = None,
 ):
     """
     Saves LFP correlation arrays for frequency bands
@@ -1129,7 +1124,7 @@ def save_lfp_correlation(
 
 def process_raw_data(
     main_recording: si.BaseRecording,
-    recording_combined: Union[si.BaseRecording, None],
+    recording_combined: si.BaseRecording | None,
     stream_name: str,
     results_folder: str,
     is_lfp: bool,
@@ -1258,9 +1253,9 @@ def process_raw_data(
 def extract_continuous(
     sorting_folder: Path,
     results_folder: Path,
-    stream_to_use: Union[str, None] = None,
+    stream_to_use: str | None = None,
     main_recording_min_secs: int = 600,
-    probe_surface_finding: Union[Path, None] = None,
+    probe_surface_finding: Path | None = None,
     lfp_freq_min: float = 1,
     lfp_freq_max: float = 300,
     num_parallel_jobs: int = 10,
@@ -1338,7 +1333,6 @@ def extract_continuous(
         Padding (in ms) added to each chunk before bandpass filtering
         to reduce edge artifacts.
     """
-
     session_folder = Path(str(sorting_folder).split("_sorted")[0])
 
     # At some point the directory structure changed- handle different cases.

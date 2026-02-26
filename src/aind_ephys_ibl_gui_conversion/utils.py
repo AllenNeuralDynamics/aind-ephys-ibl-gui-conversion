@@ -174,7 +174,7 @@ def fexpand(x, ns=1, axis=None):
     return np.concatenate((x, xcomp), axis=axis)
 
 
-class WindowGenerator(object):
+class WindowGenerator:
     """
     `wg = WindowGenerator(ns, nswin, overlap)`
 

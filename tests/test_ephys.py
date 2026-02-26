@@ -12,8 +12,8 @@ import spikeinterface.preprocessing as spre
 from spikeinterface.extractors import toy_example
 
 from aind_ephys_ibl_gui_conversion.ephys import (
-    _stream_to_probe_name,
     _merge_separate_asset_recording_dicts,
+    _stream_to_probe_name,
     get_concatenated_recordings,
     get_largest_segment_recordings,
     get_main_recording_from_list,
@@ -97,7 +97,8 @@ class TestStreamToProbeNameFunction(unittest.TestCase):
 
     def test_probe_name_without_suffix(self):
         """Test extraction of probe name from stream without -AP/-LFP
-        suffix."""
+        suffix.
+        """
         stream_name = "Record Node 109#Neuropix-PXI-100.45883-1"
         expected = "45883-1"
         result = _stream_to_probe_name(stream_name)
@@ -267,7 +268,6 @@ class TestExtractContinuous(unittest.TestCase):
 
     def test_remove_overlapping_channels(self):
         """Tests that overlapping channels are removed correctly."""
-
         # Create mock recordings
         rec1 = MagicMock()
         rec1.channel_ids = [0, 1, 2]

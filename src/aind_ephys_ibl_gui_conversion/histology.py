@@ -1,6 +1,7 @@
 """
 Functions to process histology
 """
+
 import json
 import os
 
@@ -88,7 +89,8 @@ def projected_onto_line(points, line_N, line_P):
                              Shape (n_dimensions,).
         line_P (np.ndarray): A point on the line. Shape (n_dimensions,).
 
-    Returns:
+    Returns
+    -------
         np.ndarray: An array of projected points.
                     Shape (n_points, n_dimensions).
 
@@ -126,19 +128,16 @@ def read_json_as_dict(filepath: str):
     Reads a json as dictionary.
 
     Parameters
-    ------------------------
-
+    ----------
     filepath: PathLike
         Path where the json is located.
 
     Returns
-    ------------------------
-
+    -------
     dict:
         Dictionary with the data the json has.
 
     """
-
     dictionary = {}
 
     if os.path.exists(filepath):
@@ -153,12 +152,12 @@ def __read_zarr_image(image_path):
     Reads a zarr image
 
     Parameters
-    -------------
+    ----------
     image_path: PathLike
         Path where the zarr image is located
 
     Returns
-    -------------
+    -------
     np.array
         Numpy array with the zarr image
     """
@@ -191,7 +190,6 @@ def check_orientation(img: np.array, params: dict, orientations: dict):
     img_out : np.array
         The raw image oriented to the CCF
     """
-
     orient_mat = np.zeros((3, 3))
     acronym = ["", "", ""]
 
@@ -230,7 +228,6 @@ def get_highest_level_info(filepath, return_order="xyz"):
     """
     Gets the highest level information
     """
-
     with open(os.path.join(filepath, ".zattrs")) as f:
         metadata = json.load(f)
 
