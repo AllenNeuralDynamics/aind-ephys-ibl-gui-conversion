@@ -1138,6 +1138,7 @@ def process_raw_data(
     chunk_duration: float,
     lfp_correlation_min_secs: int,
     lfp_correlation_num_bins: int,
+    num_parallel_jobs: int = 10,
 ):
     """
     Processes raw data for a given stream by computing RMS and (if applicable)
@@ -1181,6 +1182,9 @@ def process_raw_data(
     lfp_correlation_num_bins : int
         Number of bins used to compute LFP correlation.
 
+    num_parallel_jobs : int, optional
+        Number of parallel workers for RMS computation. Defaults to 10.
+
     """
     probe_name = _stream_to_probe_name(stream_name)
     output_folder = Path(results_folder) / probe_name
@@ -1198,6 +1202,7 @@ def process_raw_data(
             output_folder,
             target_freq_resolution_psd,
             chunk_duration,
+            n_jobs=num_parallel_jobs,
             is_lfp=is_lfp,
         )
 
@@ -1237,6 +1242,7 @@ def process_raw_data(
         output_folder,
         target_freq_resolution_psd,
         chunk_duration,
+        n_jobs=num_parallel_jobs,
         is_lfp=is_lfp,
         tag=tag,
     )
@@ -1448,6 +1454,7 @@ def extract_continuous(
             chunk_duration=chunk_duration,
             lfp_correlation_min_secs=lfp_correlation_min_secs,
             lfp_correlation_num_bins=lfp_correlation_num_bins,
+            num_parallel_jobs=num_parallel_jobs,
         )
 
     logging.info(
@@ -1491,4 +1498,5 @@ def extract_continuous(
             chunk_duration=chunk_duration,
             lfp_correlation_min_secs=lfp_correlation_min_secs,
             lfp_correlation_num_bins=lfp_correlation_num_bins,
+            num_parallel_jobs=num_parallel_jobs,
         )
