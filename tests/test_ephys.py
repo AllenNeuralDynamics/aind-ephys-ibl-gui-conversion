@@ -140,7 +140,8 @@ class TestExtractContinuous(unittest.TestCase):
         """Set up small synthetic recordings for reuse."""
         rec, _ = toy_example(num_segments=1, num_channels=4, seed=0)
         rec_lfp = spre.decimate(
-            spre.bandpass_filter(rec, 0.1, 300), decimation_factor=10
+            spre.bandpass_filter(rec, 0.1, 300, ignore_low_freq_error=True),
+            decimation_factor=10,
         )
         cls.rec_ap = rec
         cls.rec_lfp = rec_lfp
