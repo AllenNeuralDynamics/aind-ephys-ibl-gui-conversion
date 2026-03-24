@@ -23,7 +23,7 @@ wheels = [
 
 [[package]]
 name = "aind-ephys-ibl-gui-conversion"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "aind-mri-utils" },
@@ -66,7 +66,7 @@ requires-dist = [
     { name = "iblatlas" },
     { name = "numpy" },
     { name = "one-api", specifier = ">=2.6.0" },
-    { name = "spikeinterface", extras = ["full"], specifier = ">=0.103.0" },
+    { name = "spikeinterface", extras = ["full"], specifier = ">=0.104.0" },
     { name = "tqdm", specifier = ">=4.66.1" },
     { name = "wavpack-numcodecs" },
 ]
@@ -847,7 +847,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -1639,16 +1639,16 @@ wheels = [
 
 [[package]]
 name = "neo"
-version = "0.14.3"
+version = "0.14.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
     { name = "packaging" },
     { name = "quantities" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/12/74/2906034ce92f7fb76dac5f095dcbb2b061f55b1f6eda53fc45335c1689e2/neo-0.14.3.tar.gz", hash = "sha256:50d473fb9070d1728ec6fd72bdad16262b40f7c99df7ff5e8d927ebc2680b080", size = 5076523, upload-time = "2025-10-13T12:11:59.036Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7f/b1/e9228d616c817098b673ab990e82acb431856559f4e0235a687854df1ef4/neo-0.14.4.tar.gz", hash = "sha256:cbe24031c514543005ec698d8fe024b95a0839e9efd469bf6f8290dc3d86b3b5", size = 5085927, upload-time = "2026-03-12T09:59:56.893Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3d/a1/670f8b8f92f175a109c175afb78d9ea22df7e10248b77f509e78212ad5b0/neo-0.14.3-py3-none-any.whl", hash = "sha256:65ad4c4e8e5df19a530b706c7cc51a4fff55aa56969a2b76ee0daefbcfadd04e", size = 688564, upload-time = "2025-10-13T12:11:57.34Z" },
+    { url = "https://files.pythonhosted.org/packages/ac/66/93359047a9c7ede7c6319f58b2cee3be19552f57ef5380fe95cb812272fb/neo-0.14.4-py3-none-any.whl", hash = "sha256:0cd863424e35dddd768d713cfcc48cb06ab127fe1b5b132a0793c82975de5be4", size = 697727, upload-time = "2026-03-12T09:59:54.609Z" },
 ]
 
 [[package]]
@@ -2098,15 +2098,16 @@ wheels = [
 
 [[package]]
 name = "probeinterface"
-version = "0.3.0"
+version = "0.3.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
     { name = "packaging" },
+    { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a9/fc/012b33926a081a6f5baaf649dc437227a45ec529b4f2b72bd378354c51c2/probeinterface-0.3.0.tar.gz", hash = "sha256:38d7436a771451400ec119e7752bf3b0420faccb7b64c75c98964fa3982ed64f", size = 6485514, upload-time = "2025-07-30T09:04:16.954Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ad/b6/149976dac9228c39a80fd1dee1743b3ba8e878b8c425df4304a7ac395aa1/probeinterface-0.3.2.tar.gz", hash = "sha256:8cf02afb1f344be027e1f29e7a2c54fd35b38573ad77890fc5076f957ddf3db5", size = 6681139, upload-time = "2026-03-20T16:06:09.401Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/16/26/145a4cd35b232e6eea83558fa04af24aaba7872b985e454d848e81600664/probeinterface-0.3.0-py3-none-any.whl", hash = "sha256:c038b246d9b7cf2e0d485fbd993c41cbe1354ccaf3c5f34c9c14bb108e049767", size = 59854, upload-time = "2025-07-30T09:04:14.989Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/c9/7cd477fa3cc6e31b643c1ca8d13a7b398fa8c2b6a9c5926cab916729cf43/probeinterface-0.3.2-py3-none-any.whl", hash = "sha256:f288d013697a73836384a9ee8db6bc979764814b981b6730d463d3bd04d5f317", size = 68822, upload-time = "2026-03-20T16:06:08.059Z" },
 ]
 
 [[package]]
@@ -2588,14 +2589,14 @@ wheels = [
 
 [[package]]
 name = "quantities"
-version = "0.16.2"
+version = "0.16.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/40/b4/a14dbeebf8ab08600152f157344fd88db961a3afdfd0eddc25958c5182a1/quantities-0.16.2.tar.gz", hash = "sha256:1f7c24f10d9ff57ddf751a358ea2fdfa9914516722f06a788ef4a2924c77d21c", size = 101862, upload-time = "2025-04-11T14:16:12.154Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/aa/50/19194d2cf428239ecbda876d81bbfddb76697a248c5a7478ae83d0b98fee/quantities-0.16.4.tar.gz", hash = "sha256:f5b6deb74f6ed814ec56b204dcf7b5d3c526456157de48e5a78681064f98bf36", size = 100726, upload-time = "2026-01-16T10:43:48.858Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/17/0c/b4ee3f929bbe564101f110080dcdd33d1181a6f8a041cc9e21d992509b52/quantities-0.16.2-py3-none-any.whl", hash = "sha256:bd5b1ed422770b7cd8952ccfccaf67a89024ae0ecb31b1eacbc7ff966899ab34", size = 103021, upload-time = "2025-04-11T14:16:10.524Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/1f/9751abbc14422092754423d41c89b0884dba3abc236125adc427d108216a/quantities-0.16.4-py3-none-any.whl", hash = "sha256:cd8e82339eb553d8bee0bda0e41a80b91e21795e1174e7d8a82db8e6de2663f6", size = 104009, upload-time = "2026-01-16T10:43:47.252Z" },
 ]
 
 [[package]]
@@ -2852,7 +2853,7 @@ wheels = [
 
 [[package]]
 name = "spikeinterface"
-version = "0.103.0"
+version = "0.104.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "neo" },
@@ -2867,9 +2868,9 @@ dependencies = [
     { name = "zarr", version = "2.18.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "zarr", version = "2.18.7", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/65/1f/243610cf7d9b7d565b8fc1824aa949119807b88500e763f371ec03eba8f3/spikeinterface-0.103.0.tar.gz", hash = "sha256:707cebd20994f32201ecace7241cbcbd7699a7e41e151d6a972f2858a003111d", size = 844943, upload-time = "2025-07-31T14:44:06.532Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cc/a7/6bc6a5ef16cbcd4f26a0b1ff189c82626ebc432a10a448516f28b1d27644/spikeinterface-0.104.0.tar.gz", hash = "sha256:491039b54633f39f42e8baf040813f93c3f56a6cec707072fe2b4ec2d9555aaf", size = 907026, upload-time = "2026-03-23T11:05:44.852Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ff/ff/e84fd5ab4b28aaf2118750588b9a00a9e7250328f609dd475e7239525e7d/spikeinterface-0.103.0-py3-none-any.whl", hash = "sha256:bc78016bb55d1cefdc81a444434e8bb5e63153ada595aa3efb8f898f6a2a540a", size = 1058903, upload-time = "2025-07-31T14:44:04.823Z" },
+    { url = "https://files.pythonhosted.org/packages/31/5b/ee401b99a6c66aa1083ce63ec56c7343df95156c0220ff25b15e45613174/spikeinterface-0.104.0-py3-none-any.whl", hash = "sha256:65901b3048580ffe83fff59ead4547f2f3020e190441d67d5e36306653c8a9f0", size = 1128722, upload-time = "2026-03-23T11:05:43.021Z" },
 ]
 
 [package.optional-dependencies]

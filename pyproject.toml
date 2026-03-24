@@ -24,7 +24,7 @@ dependencies = [
     "antspyx>=0.4.2",
     "iblatlas",
     "one-api>=2.6.0",
-    "spikeinterface[full]>=0.103.0",
+    "spikeinterface[full]>=0.104.0",
     "tqdm>=4.66.1",
     "wavpack-numcodecs",
     "numpy",

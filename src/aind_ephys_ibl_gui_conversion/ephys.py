@@ -554,6 +554,7 @@ def process_lfp_stream(
             freq_min=freq_min,
             freq_max=freq_max,
             margin_ms=margin_ms,
+            ignore_low_freq_error=True,
         )
     else:  # 2.0 probe, decimate to 1250
         logging.info("Found 2.0 probe")
@@ -566,6 +567,7 @@ def process_lfp_stream(
             freq_min=freq_min,
             freq_max=freq_max,
             margin_ms=margin_ms,
+            ignore_low_freq_error=True,
         )
         decimation_factor = int(
             recording_lfp_bandpass.sampling_frequency / target_sample_rate
@@ -1047,7 +1049,11 @@ def save_lfp_correlation(
         margin_ms = (1 / low_f) * 3 * 1000
         bandpass_filtered_recordings[(band, (low_f, high_f))] = (
             spre.bandpass_filter(
-                recording, freq_min=low_f, freq_max=high_f, margin_ms=margin_ms
+                recording,
+                freq_min=low_f,
+                freq_max=high_f,
+                margin_ms=margin_ms,
+                ignore_low_freq_error=True,
             )
         )
 
