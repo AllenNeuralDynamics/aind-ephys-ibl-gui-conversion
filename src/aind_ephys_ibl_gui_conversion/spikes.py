@@ -70,8 +70,6 @@ def _patch_si_deprecated_metric_validation() -> None:
         )
 
 
-_patch_si_deprecated_metric_validation()
-
 
 def extract_spikes(  # noqa: C901
     sorting_folder: Path,
