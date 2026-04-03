@@ -7,11 +7,70 @@ import numpy as np
 import pandas as pd
 import spikeinterface as si
 import spikeinterface.extractors as se
+from packaging.version import Version
 from spikeinterface.exporters import export_to_phy
 
 from aind_ephys_ibl_gui_conversion.recording_utils import (
     _stream_to_probe_name,
 )
+
+# Metric names that were renamed in spikeinterface >= 0.104
+_DEPRECATED_METRIC_RENAMES = {
+    "peak_to_valley": "peak_to_trough_duration",
+    "peak_trough_ratio": "waveform_ratios",
+    "num_positive_peaks": "waveform_baseline_flatness",
+    "num_negative_peaks": "waveform_baseline_flatness",
+    "velocity_above": "velocity_fits",
+    "velocity_below": "velocity_fits",
+}
+
+
+def _patch_si_deprecated_metric_validation() -> None:
+    """Monkey-patch spikeinterface >= 0.104 to ignore deprecated template
+    metric names when loading legacy waveform extractor folders.
+
+    In Code Ocean the data folders are immutable so we cannot rewrite
+    params.json in place. Instead we patch BaseMetricExtension._set_params,
+    which is where the ValueError is raised for deprecated metric names.
+    The remapping here is intentionally minimal — the full cleanup of metric
+    params keys, velocity sub-params, etc. is handled afterward by
+    ComputeTemplateMetrics._handle_backward_compatibility_on_load.
+    """
+    si_version = Version(si.__version__)
+    if si_version < Version("0.104.0"):
+        return
+
+    try:
+        from spikeinterface.core import analyzer_extension_core as _aec
+
+        original_set_params = _aec.BaseMetricExtension._set_params
+
+        def _patched_set_params(self, metric_names=None, **kwargs):
+            if metric_names is not None:
+                metric_names = [
+                    _DEPRECATED_METRIC_RENAMES.get(n, n)
+                    for n in metric_names
+                ]
+                # Deduplicate (e.g. velocity_above + velocity_below -> velocity_fits)
+                seen = []
+                for n in metric_names:
+                    if n not in seen:
+                        seen.append(n)
+                metric_names = seen
+
+            return original_set_params(self, metric_names=metric_names, **kwargs)
+
+        _aec.BaseMetricExtension._set_params = _patched_set_params
+        logging.info(
+            "Patched spikeinterface deprecated template metric validation."
+        )
+    except Exception as e:
+        logging.warning(
+            f"Could not patch spikeinterface metric validation: {e}"
+        )
+
+
+_patch_si_deprecated_metric_validation()
 
 
 def extract_spikes(  # noqa: C901
@@ -33,6 +92,11 @@ def extract_spikes(  # noqa: C901
     min_duration_secs : int
         Minimum duration (seconds) for spike extraction.
     """
+    # Must be called here as well as module level — this function runs in a
+    # subprocess via concurrent.futures and the module-level patch won't
+    # carry over to the child process.
+    _patch_si_deprecated_metric_validation()
+
     session_folder = Path(str(sorting_folder).split("_sorted")[0])
     scratch_folder = Path("/scratch")
 
