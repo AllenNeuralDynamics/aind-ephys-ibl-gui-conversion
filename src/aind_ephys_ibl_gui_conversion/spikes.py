@@ -16,12 +16,16 @@ from aind_ephys_ibl_gui_conversion.recording_utils import (
 
 # Metric names that were renamed in spikeinterface >= 0.104
 _DEPRECATED_METRIC_RENAMES = {
+    # template metrics
     "peak_to_valley": "peak_to_trough_duration",
     "peak_trough_ratio": "waveform_ratios",
     "num_positive_peaks": "waveform_baseline_flatness",
     "num_negative_peaks": "waveform_baseline_flatness",
     "velocity_above": "velocity_fits",
     "velocity_below": "velocity_fits",
+    # quality metrics
+    "l_ratio": "mahalanobis",
+    "isolation_distance": "mahalanobis",
 }
 
 
