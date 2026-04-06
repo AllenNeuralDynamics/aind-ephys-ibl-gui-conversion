@@ -50,24 +50,22 @@ def _patch_si_deprecated_metric_validation() -> None:
 
     def _patched_set_params(self, metric_names=None, **kwargs):
         if metric_names is not None:
-            metric_names = [
-                _DEPRECATED_METRIC_RENAMES.get(n, n) for n in metric_names
-            ]
-            # Deduplicate(velocity_above + velocity_below -> velocity_fits)
+            remapped = [_DEPRECATED_METRIC_RENAMES.get(n, n) for n in metric_names]
+            if remapped != metric_names:
+                logging.warning(
+                    f"Remapping deprecated SI metric names: "
+                    f"{[n for n in metric_names if n in _DEPRECATED_METRIC_RENAMES]}"
+                )
+            # Deduplicate (e.g. velocity_above + velocity_below -> velocity_fits)
             seen = []
-            for n in metric_names:
+            for n in remapped:
                 if n not in seen:
                     seen.append(n)
             metric_names = seen
 
-        return original_set_params(
-            self, metric_names=metric_names, **kwargs
-        )
+        return original_set_params(self, metric_names=metric_names, **kwargs)
 
     _aec.BaseMetricExtension._set_params = _patched_set_params
-    logging.info(
-        "Patched spikeinterface deprecated template metric validation."
-    )
 
 
 def extract_spikes(  # noqa: C901
