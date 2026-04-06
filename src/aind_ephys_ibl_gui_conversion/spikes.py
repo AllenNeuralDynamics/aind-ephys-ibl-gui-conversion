@@ -89,7 +89,7 @@ def extract_spikes(  # noqa: C901
     min_duration_secs : int
         Minimum duration (seconds) for spike extraction.
     """
-    # Must be called here as well as module level — this function runs in a
+    # Must be called here this function runs in a
     # subprocess via concurrent.futures and the module-level patch won't
     # carry over to the child process.
     _patch_si_deprecated_metric_validation()
