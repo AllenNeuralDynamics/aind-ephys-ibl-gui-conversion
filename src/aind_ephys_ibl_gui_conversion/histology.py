@@ -28,7 +28,7 @@ def create_slicer_fcsv(
 
     header0 = "# Markups fiducial file version = 4.11\n"
     header1 = "# CoordinateSystem = " + direction + "\n"
-    header2 = str(
+    header2 = (
         "# columns = id,x,y,z,ow,ox,oy,oz,vis,sel,lock,"
         "label,desc,associatedNodeID\n"
     )
