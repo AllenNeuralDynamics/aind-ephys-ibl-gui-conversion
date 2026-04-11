@@ -55,10 +55,17 @@ def _patch_si_deprecated_metric_validation() -> None:
             ]
             if remapped != metric_names:
                 logging.warning(
-                    f"Remapping deprecated SI metric names: "
-                    f"{[n for n in metric_names if n in _DEPRECATED_METRIC_RENAMES]}"
+                    "Remapping deprecated SI metric names: "
+                    + str(
+                        [
+                            n
+                            for n in metric_names
+                            if n in _DEPRECATED_METRIC_RENAMES
+                        ]
+                    )
                 )
-            # Deduplicate (e.g. velocity_above + velocity_below -> velocity_fits)
+            # Deduplicate 
+            # (e.g. velocity_above + velocity_below -> velocity_fits)
             seen = []
             for n in remapped:
                 if n not in seen:
