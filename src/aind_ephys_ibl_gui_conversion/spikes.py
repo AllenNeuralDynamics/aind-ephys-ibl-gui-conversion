@@ -49,6 +49,13 @@ def _patch_si_deprecated_metric_validation() -> None:
     original_set_params = _aec.BaseMetricExtension._set_params
 
     def _patched_set_params(self, metric_names=None, **kwargs):
+        """
+        Remap deprecated SI metric names before validation fires.
+        Intercepts BaseMetricExtension._set_params to
+        translate legacy metric names to their >= 0.104 equivalents,
+        allowing legacy WaveformExtractor
+        folders to load without raising a ValueError.
+        """
         if metric_names is not None:
             remapped = [
                 _DEPRECATED_METRIC_RENAMES.get(n, n) for n in metric_names
