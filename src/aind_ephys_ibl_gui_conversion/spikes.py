@@ -50,7 +50,9 @@ def _patch_si_deprecated_metric_validation() -> None:
 
     def _patched_set_params(self, metric_names=None, **kwargs):
         if metric_names is not None:
-            remapped = [_DEPRECATED_METRIC_RENAMES.get(n, n) for n in metric_names]
+            remapped = [
+                _DEPRECATED_METRIC_RENAMES.get(n, n) for n in metric_names
+            ]
             if remapped != metric_names:
                 logging.warning(
                     f"Remapping deprecated SI metric names: "
