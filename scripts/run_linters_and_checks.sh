@@ -47,8 +47,8 @@ main() {
   if [ "$CHECKS" = true ]; then
     echo "+ ruff check"
     run ruff check
-    echo "+ interrogate -v"
-    run interrogate -v
+    echo "+ interrogate -v src"
+    run interrogate -v src
     echo "+ codespell --check-filenames"
     run codespell --check-filenames
     echo "+ pytest --cov aind_ephys_ibl_gui_conversion$([ -n "$PYTEST_ARGS" ] && printf ' -- %s' "$PYTEST_ARGS")"

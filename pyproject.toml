@@ -70,6 +70,7 @@ exclude = [
   "build",
   "examples",
   "site",
+  ".venv",
 ]
 
 [tool.commitizen]
