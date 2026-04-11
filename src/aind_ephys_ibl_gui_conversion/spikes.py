@@ -64,7 +64,7 @@ def _patch_si_deprecated_metric_validation() -> None:
                         ]
                     )
                 )
-            # Deduplicate 
+            # Deduplicate
             # (e.g. velocity_above + velocity_below -> velocity_fits)
             seen = []
             for n in remapped:
