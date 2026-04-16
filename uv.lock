@@ -69,7 +69,7 @@ requires-dist = [
     { name = "iblatlas" },
     { name = "numpy" },
     { name = "one-api", specifier = ">=2.6.0" },
-    { name = "spikeinterface", extras = ["full"], specifier = ">=0.104.0" },
+    { name = "spikeinterface", extras = ["full"], specifier = ">=0.103.0" },
     { name = "tqdm", specifier = ">=4.66.1" },
     { name = "wavpack-numcodecs" },
 ]
