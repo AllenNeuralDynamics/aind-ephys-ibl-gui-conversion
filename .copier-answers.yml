@@ -1,15 +1,18 @@
 # Changes here will be overwritten by Copier; NEVER EDIT MANUALLY
-_commit: 0.1.4
+_commit: 0.1.15
 _src_path: /home/galen.lynch/Documents/Code/aind-python-copier-template
 author_email: arjun.sridhar1998@gmail.com
 author_fullname: Arjun Sridhar
+auto_setup_repo: false
 current_year: '2026'
 github_org: AllenNeuralDynamics
 github_url: https://github.com/AllenNeuralDynamics/aind-ephys-ibl-gui-conversion
+include_claude_md: true
 include_cli: false
+include_commitizen: true
 include_docs: false
 include_notebooks: false
-include_type_hints: false
+include_type_hints: true
 institute_name: Allen Institute for Neural Dynamics
 license: MIT
 project_description: Convert ephys data for use in IBL GUI
