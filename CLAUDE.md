@@ -46,7 +46,9 @@ the package is a library consumed by other AIND pipelines (notably
 - Build system: hatchling
 - Linting/formatting: ruff (line length 79)
 - Testing: pytest with coverage reporting
-- Type checking: mypy (strict mode), but no type hints required (`include_type_hints: false` in copier)
+- Type checking: mypy (strict mode); the code is partially type-hinted and
+  does not currently pass strict checking, so `run-mypy: false` in CI.
+  Local `uv run mypy` still works for incremental cleanup.
 - Docstring coverage: interrogate, **fail-under 100%**
 - Versioning: commitizen (semantic versioning via conventional commits)
 
@@ -123,7 +125,8 @@ Open Ephys stream IDs follow
 
 - **Line length**: 79
 - **Target**: Python 3.10+
-- **Type hints**: Not required (package predates typing push)
+- **Type hints**: Partially present; not all modules pass strict mypy yet
+  (~80 errors). Add hints when editing; don't remove existing ones.
 - **Ruff rules**: `Q, RUF100, C90, I, F, E, W, UP, PYI` (no `ANN` or `D`)
 - **McCabe complexity**: max 14
 - **Docstrings**: Required on all public functions/classes (interrogate
