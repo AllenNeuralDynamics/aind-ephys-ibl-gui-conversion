@@ -322,10 +322,14 @@ def _compute_all_metrics(  # noqa: C901
                 lfp_raw = raw
 
             # CMR + demean + Hann window -> single FFT
-            lfp_raw = lfp_raw - np.median(lfp_raw, axis=1, keepdims=True)
+            np.subtract(
+                lfp_raw,
+                np.median(lfp_raw, axis=1, keepdims=True),
+                out=lfp_raw,
+            )
             lfp_seg = lfp_raw[: hann.shape[0]]
-            lfp_seg = lfp_seg - lfp_seg.mean(axis=0)
-            lfp_seg = lfp_seg * hann[:, None]
+            np.subtract(lfp_seg, lfp_seg.mean(axis=0), out=lfp_seg)
+            np.multiply(lfp_seg, hann[:, None], out=lfp_seg)
             X = scipy.fft.rfft(lfp_seg, axis=0)
 
             # RMS via Parseval (corrected for Hann window)
