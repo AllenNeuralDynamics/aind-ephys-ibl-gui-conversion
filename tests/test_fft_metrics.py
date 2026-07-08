@@ -15,6 +15,7 @@ from aind_ephys_ibl_gui_conversion.io import (
 from aind_ephys_ibl_gui_conversion.metrics import (
     COHERENCE_BANDS,
     _compute_all_metrics,
+    _get_channel_shanks,
     _parseval_rms,
 )
 from aind_ephys_ibl_gui_conversion.types import ExperimentBlock
@@ -63,6 +64,59 @@ def _make_synthetic_recording(
     recording.set_property("group", np.zeros(n_channels, dtype=int))
 
     return recording, traces
+
+
+def _make_multishank_recording(
+    n_shanks: int = 4,
+    ch_per_shank: int = 8,
+    duration_sec: float = 10.0,
+    fs: float = 2500.0,
+    shank_pitch: float = 250.0,
+):
+    """Create a multi-shank recording attached to a real probe.
+
+    The probe is attached with the SpikeInterface default
+    ``group_mode="by_probe"``, which collapses every channel into a
+    single ``group`` (all zeros) -- reproducing the raw-recording
+    condition that used to merge all shanks together.  Shank identity
+    is therefore only recoverable from the probe's ``shank_ids``.
+    """
+    import probeinterface as pi
+    import spikeinterface as si
+
+    n_channels = n_shanks * ch_per_shank
+    n_samples = int(duration_sec * fs)
+    t = np.arange(n_samples) / fs
+
+    rng = np.random.default_rng(7)
+    traces = np.zeros((n_samples, n_channels), dtype=np.float32)
+    for f in (10.0, 100.0):
+        amps = rng.uniform(0.5, 2.0, size=n_channels).astype(np.float32)
+        traces += amps[None, :] * np.sin(2 * np.pi * f * t)[:, None]
+    traces += rng.normal(0, 0.1, size=traces.shape).astype(np.float32)
+
+    recording = si.NumpyRecording(
+        traces_list=[traces],
+        sampling_frequency=fs,
+    )
+
+    # Build a multi-shank probe: each shank offset in x, depth in y.
+    positions = np.zeros((n_channels, 2))
+    shank_ids = np.zeros(n_channels, dtype=int)
+    for shank in range(n_shanks):
+        for c in range(ch_per_shank):
+            idx = shank * ch_per_shank + c
+            positions[idx, 0] = shank * shank_pitch
+            positions[idx, 1] = c * 20.0
+            shank_ids[idx] = shank
+
+    probe = pi.Probe(ndim=2)
+    probe.set_contacts(positions=positions, shank_ids=shank_ids)
+    probe.set_device_channel_indices(np.arange(n_channels))
+    # Default group_mode="by_probe" -> all channels land in group 0.
+    recording = recording.set_probe(probe)
+
+    return recording, n_shanks, ch_per_shank
 
 
 # ---------------------------------------------------------------------------
@@ -380,3 +434,50 @@ class TestProcessStreamFft:
         # Coherency is complex
         for coh in result.coherency.values():
             assert np.iscomplexobj(coh)
+
+
+class TestMultiShankGrouping:
+    """Regression tests for multi-shank LFP correlation splitting."""
+
+    def test_shank_ids_recovered_when_group_uniform(self):
+        """Probe shank_ids drive grouping even if group is uniform."""
+        recording, n_shanks, _ = _make_multishank_recording(
+            n_shanks=4, ch_per_shank=8
+        )
+
+        # Reproduce the bug precondition: group property is uniform.
+        groups = recording.get_property("group")
+        assert groups is None or len(np.unique(groups)) == 1
+
+        shanks = _get_channel_shanks(recording)
+        assert len(np.unique(shanks)) == n_shanks
+
+    def test_correlation_split_per_shank(self):
+        """Each shank gets its own correlation matrix, not one merged."""
+        recording, n_shanks, ch_per_shank = _make_multishank_recording(
+            n_shanks=4, ch_per_shank=8
+        )
+        block = ExperimentBlock(
+            recording=recording, lfp_recording=None, block_index=0
+        )
+        result = _compute_all_metrics(
+            block,
+            window_interval=2.0,
+            window_duration=2.0,
+        )
+
+        # One correlation matrix per (band, shank), each sized to a
+        # single shank -- not one merged (n_channels x n_channels).
+        for band_name in COHERENCE_BANDS:
+            shank_keys = [
+                k for k in result.correlation if k[0] == band_name
+            ]
+            assert len(shank_keys) == n_shanks
+            for key in shank_keys:
+                corr = result.correlation[key]
+                assert corr.shape == (ch_per_shank, ch_per_shank)
+
+        # Shank labels are contiguous 1..n_shanks.
+        shank_labels = sorted({k[1] for k in result.correlation})
+        assert shank_labels == list(range(1, n_shanks + 1))
+

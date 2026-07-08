@@ -29,6 +29,64 @@ COHERENCE_BANDS: dict[str, tuple[float, float]] = {
 # ---------------------------------------------------------------------------
 
 
+def _shank_sort_key(shank_id: object) -> tuple[int, object]:
+    """Sort key that orders shank ids numerically when possible.
+
+    Probe ``shank_ids`` are strings (e.g. ``"0"``..``"3"``); a plain
+    string sort would place ``"10"`` before ``"2"``.  Numeric ids are
+    grouped first (sorted as integers), non-numeric ids fall back to a
+    lexicographic sort.
+    """
+    try:
+        return (0, int(shank_id))
+    except (TypeError, ValueError):
+        return (1, str(shank_id))
+
+
+def _get_channel_shanks(recording) -> np.ndarray:
+    """Return a 0-based per-channel shank index for a recording.
+
+    Shank identity is taken from the attached probe's ``shank_ids``
+    when the probe spans multiple shanks.  This is robust to the
+    recording's ``group`` property, which for a probe attached with
+    the SpikeInterface default ``group_mode="by_probe"`` collapses
+    every channel of a multi-shank probe into a single group and would
+    otherwise merge all shanks together.  Falls back to the ``group``
+    property, then to a single shank.
+
+    Returns
+    -------
+    np.ndarray
+        Contiguous 0-based shank index per channel, shape
+        ``(n_channels,)``.
+    """
+    n_channels = recording.get_num_channels()
+
+    # Prefer probe shank_ids (correct regardless of group_mode).
+    try:
+        probe = recording.get_probe()
+        shank_ids = np.asarray(probe.shank_ids)
+        if shank_ids.size == n_channels:
+            unique = sorted(set(shank_ids.tolist()), key=_shank_sort_key)
+            if len(unique) > 1:
+                remap = {sid: i for i, sid in enumerate(unique)}
+                return np.array(
+                    [remap[s] for s in shank_ids.tolist()], dtype=int
+                )
+    except Exception:
+        pass
+
+    # Fall back to the group property (single-shank or no probe).
+    try:
+        groups = recording.get_property("group")
+        if groups is not None:
+            return np.asarray(groups)
+    except Exception:
+        pass
+
+    return np.zeros(n_channels, dtype=int)
+
+
 def _parseval_rms(
     X: np.ndarray,
     freq_mask: np.ndarray,
@@ -229,11 +287,11 @@ def _compute_all_metrics(  # noqa: C901
     # RMS correction: undo the power loss from windowing
     rms_correction = np.sqrt(lfp_window_samples / window_power)
 
-    # Channel group / shank info (from the LFP source)
-    try:
-        channel_groups = lfp_src.get_property("group")
-    except Exception:
-        channel_groups = np.zeros(lfp_src.get_num_channels(), dtype=int)
+    # Channel group / shank info (from the LFP source).  Derived from
+    # the probe's shank_ids so multi-shank probes are split correctly
+    # even when the raw recording's "group" property lumps every shank
+    # into a single group (SpikeInterface default group_mode).
+    channel_groups = _get_channel_shanks(lfp_src)
     channel_locations = lfp_src.get_channel_locations()
     unique_groups = np.unique(channel_groups)
     shank_info = {}
