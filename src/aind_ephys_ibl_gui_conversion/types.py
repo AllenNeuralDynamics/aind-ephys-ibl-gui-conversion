@@ -61,6 +61,7 @@ class ChannelTable:
     """Per-probe channel metadata in canonical output order."""
 
     raw_ind: np.ndarray  # legacy positional rawInd, unchanged for now
+    contact_id: np.ndarray  # physical probe contact ids in row order
     local_coordinates: np.ndarray  # (n_channels, 2)
     shank_ind: np.ndarray  # 0-based normalized shank index per channel
 

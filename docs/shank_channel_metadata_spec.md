@@ -22,6 +22,10 @@ instance of this pattern.
 
 `channels.rawInd.npy` is currently a legacy positional placeholder. This
 contract does **not** redefine it; channel-table row position is the join key.
+`channels.contactId.npy` carries the physical probe contact identity when
+probe metadata provides one. Consumers should tolerate its absence when loading
+older result folders; absence means contact-ID stitching is unavailable for
+that output.
 
 ## 2. Principle
 
@@ -60,9 +64,9 @@ changing the contract.
 
 - Per-channel arrays (rms, psd) remain in channel-table order; consumers
   index them **positionally**.
-- `shankInd`, `rawInd`, and matrix row-maps are descriptive fields keyed by
-  that position. `rawInd` remains the legacy positional placeholder for now;
-  consumers must not depend on it as the row selector.
+- `contactId`, `shankInd`, `rawInd`, and matrix row-maps are descriptive
+  fields keyed by that position. `rawInd` remains the legacy positional
+  placeholder for now; consumers must not depend on it as the row selector.
 - This is deliberately back-compatible: existing per-channel array ordering
   keeps working; we only add metadata and stop deriving shank membership from
   x-coordinate gaps.
@@ -99,6 +103,7 @@ changing the contract.
 |---|---|---|
 | `channels.localCoordinates.npy` | float (N, 2) | (x, depth), unchanged |
 | `channels.rawInd.npy` | int (N,) | Legacy positional placeholder, unchanged |
+| `channels.contactId.npy` | str (N,) | Physical probe contact IDs in channel-table row order; empty string when unavailable |
 | `channels.shankInd.npy` | int (N,) | 0-based shank index per channel |
 
 - Canonical order: rows `0..N-1`. All per-channel arrays (rms, psd) MUST be
@@ -152,18 +157,20 @@ changing the contract.
 ## 6. Producing side changes (`aind-ephys-ibl-gui-conversion`)
 
 1. **New `build_channel_table(recordings) -> ChannelTable`** — the single
-   derivation point. Sources: `get_channel_locations()` and
-   `get_property("group")` for `shankInd`; `rawInd` remains positional.
+   derivation point. Sources: `get_channel_locations()`,
+   `get_property("group")` for `shankInd`, and `get_property("contact_ids")`
+   or `get_probe().contact_ids` for `contactId`; `rawInd` remains positional.
 2. **`io.py` write paths** (`_assemble_and_save_stream` ~:355 and the
-   single-block path ~:484): write `rawInd` + `shankInd` via the builder
+   single-block path ~:484): write `rawInd`, `contactId`, and `shankInd` via the builder
    in **both** paths. Ensure per-channel arrays share the table order.
 3. **Metrics**: compute pairwise correlation/coherency over the full ephys
    collection. Do not compute primary pairwise artifacts per group/shank.
 4. **`_save_spectral_outputs`**: always emit `row_channels.json`. Save full
    matrices first and derive shank-suffixed compatibility files from them.
 5. **Stitching** (`_assemble_blockwise_coherence` / `_build_channel_maps`):
-   match channels by normalized shank plus local coordinate, preserving
-   channel-table row order.
+   match channels by normalized shank plus contact ID when available, falling
+   back to normalized shank plus rounded local coordinate when contact IDs are
+   missing or invalid. Preserve channel-table row order.
 6. **Tests** (`tests/test_fft_metrics.py`): assert `channels.shankInd.npy`
    present and consistent with groups; single-block run also writes
    `row_channels.json`; full matrix dims are N x N; shank compatibility matrix
@@ -205,8 +212,9 @@ changing the contract.
 - Confirm a real non-quadbase 4-shank `channels.localCoordinates`
   layout (columns per shank) to be sure `get_property("group")` is populated
   correctly upstream and the x-gap fallback is only ever a fallback.
-- Decide later whether to add a true hardware/contact identity field separate
-  from `rawInd`.
+- Verify real AIND SpikeInterface/probeinterface recordings expose contact IDs
+  in channel order either as `get_property("contact_ids")` or via
+  `get_probe().contact_ids` / `device_channel_indices`.
 
 ## 10. Bug classes eliminated by construction
 

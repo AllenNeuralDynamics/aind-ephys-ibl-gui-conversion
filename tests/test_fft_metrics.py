@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
+from aind_ephys_ibl_gui_conversion.channel_metadata import build_channel_table
 from aind_ephys_ibl_gui_conversion.io import (
     process_stream_fft,
 )
@@ -69,6 +70,58 @@ def _make_synthetic_recording(
     recording.set_property("group", np.asarray(groups, dtype=int))
 
     return recording, traces
+
+
+class _FakeRecording:
+    """Minimal recording exposing geometry/contact_ids for metadata tests."""
+
+    def __init__(
+        self,
+        *,
+        locations: np.ndarray,
+        groups: np.ndarray,
+        contact_ids: np.ndarray | None = None,
+        channel_ids: np.ndarray | None = None,
+        probe=None,
+    ) -> None:
+        self._locations = locations
+        self._groups = groups
+        self._contact_ids = contact_ids
+        self._channel_ids = channel_ids
+        self._probe = probe
+
+    def get_num_channels(self):
+        return self._locations.shape[0]
+
+    def get_channel_locations(self):
+        return self._locations
+
+    def get_property(self, name):
+        if name == "group":
+            return self._groups
+        if name == "contact_ids" and self._contact_ids is not None:
+            return self._contact_ids
+        raise KeyError(name)
+
+    def get_channel_ids(self):
+        if self._channel_ids is None:
+            return np.arange(self.get_num_channels())
+        return self._channel_ids
+
+    def get_probe(self):
+        if self._probe is None:
+            raise ValueError("No probe attached.")
+        return self._probe
+
+
+class _FakeProbe:
+    """Minimal probe exposing contact IDs and device channel indices."""
+
+    def __init__(
+        self, *, contact_ids: np.ndarray, device_channel_indices: np.ndarray
+    ):
+        self.contact_ids = contact_ids
+        self.device_channel_indices = device_channel_indices
 
 
 # ---------------------------------------------------------------------------
@@ -363,6 +416,7 @@ class TestProcessStreamFft:
             # Check channel metadata
             assert (output / "channels.localCoordinates.npy").exists()
             assert (output / "channels.rawInd.npy").exists()
+            assert (output / "channels.contactId.npy").exists()
             assert (output / "channels.shankInd.npy").exists()
 
     def test_writes_multi_shank_geometry_contract(self):
@@ -403,10 +457,83 @@ class TestProcessStreamFft:
             np.testing.assert_array_equal(
                 np.load(output / "channels.shankInd.npy"), groups
             )
+            assert np.load(output / "channels.contactId.npy").shape == (8,)
             with open(band_corr / "row_channels.json") as f:
                 row_channels = json.load(f)
             assert row_channels["shanks"]["0"]["rows"] == [0, 1, 2, 3]
             assert row_channels["shanks"]["1"]["rows"] == [4, 5, 6, 7]
+
+    def test_channel_table_uses_contact_ids_for_cross_block_stitching(self):
+        """Stable contact IDs stitch blocks before rounded coordinates."""
+        groups = np.array([0, 0])
+        rec1 = _FakeRecording(
+            locations=np.array([[0.0, 0.0], [0.0, 20.0]]),
+            groups=groups,
+            contact_ids=np.array(["s0e0", "s0e1"]),
+        )
+        rec2 = _FakeRecording(
+            locations=np.array([[0.0, 0.1], [0.0, 20.1]]),
+            groups=groups,
+            contact_ids=np.array(["s0e0", "s0e1"]),
+        )
+
+        table, block_maps = build_channel_table([rec1, rec2])
+
+        assert table.local_coordinates.shape[0] == 2
+        np.testing.assert_array_equal(
+            table.contact_id, np.array(["s0e0", "s0e1"])
+        )
+        np.testing.assert_array_equal(block_maps[0], np.array([0, 1]))
+        np.testing.assert_array_equal(block_maps[1], np.array([0, 1]))
+
+    def test_channel_table_projects_probe_contact_ids_by_device_channel(self):
+        """Probe contact vectors are projected through device channel order."""
+        probe = _FakeProbe(
+            contact_ids=np.array(["e0", "e1"]),
+            device_channel_indices=np.array([0, 1]),
+        )
+        rec = _FakeRecording(
+            locations=np.array([[0.0, 20.0], [0.0, 0.0]]),
+            groups=np.array([0, 0]),
+            channel_ids=np.array(["1", "0"]),
+            probe=probe,
+        )
+
+        table, block_maps = build_channel_table([rec])
+
+        np.testing.assert_array_equal(table.contact_id, np.array(["e1", "e0"]))
+        np.testing.assert_array_equal(block_maps[0], np.array([0, 1]))
+
+    def test_channel_table_falls_back_to_geometry_for_invalid_contact_ids(
+        self,
+    ):
+        """Partial contact ID vectors are not used as stable stitch keys."""
+        groups = np.array([0, 0])
+        probe = _FakeProbe(
+            contact_ids=np.array(["e0", None], dtype=object),
+            device_channel_indices=np.array([0, 1]),
+        )
+        rec1 = _FakeRecording(
+            locations=np.array([[0.0, 0.0], [0.0, 20.0]]),
+            groups=groups,
+            channel_ids=np.array(["0", "1"]),
+            probe=probe,
+        )
+        rec2 = _FakeRecording(
+            locations=np.array([[0.0, 0.1], [0.0, 20.1]]),
+            groups=groups,
+            channel_ids=np.array(["0", "1"]),
+            probe=probe,
+        )
+
+        table, block_maps = build_channel_table([rec1, rec2])
+
+        assert table.local_coordinates.shape[0] == 4
+        np.testing.assert_array_equal(
+            table.contact_id, np.array(["", "", "", ""])
+        )
+        np.testing.assert_array_equal(block_maps[0], np.array([0, 1]))
+        np.testing.assert_array_equal(block_maps[1], np.array([2, 3]))
 
     def test_main_tag_no_coherence(self):
         """Test tagged output without coherence."""

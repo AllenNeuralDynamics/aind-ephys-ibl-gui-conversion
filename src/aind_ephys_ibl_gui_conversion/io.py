@@ -390,6 +390,7 @@ def _save_channel_metadata(
         channel_table.local_coordinates,
     )
     np.save(output_folder / "channels.rawInd.npy", channel_table.raw_ind)
+    np.save(output_folder / "channels.contactId.npy", channel_table.contact_id)
     np.save(output_folder / "channels.shankInd.npy", channel_table.shank_ind)
 
 
