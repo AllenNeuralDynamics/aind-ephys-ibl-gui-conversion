@@ -5,8 +5,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 import scipy.fft
 
+from aind_ephys_ibl_gui_conversion.channel_metadata import (
+    build_channel_table,
+    depth_sorted_shank_rows,
+    normalized_channel_groups,
+)
 from aind_ephys_ibl_gui_conversion.types import (
     BlockMetrics,
+    ChannelTable,
     ExperimentBlock,
     ShankChannels,
 )
@@ -61,7 +67,6 @@ def _parseval_rms(
 def _normalize_spectral_estimates(
     Sij: dict[str, np.ndarray],
     psd_accum: np.ndarray,
-    shank_info: dict,
     n_windows: int,
     window_power: float,
     fs_lfp: float,
@@ -77,8 +82,6 @@ def _normalize_spectral_estimates(
         Accumulated cross-spectral density per band.
     psd_accum : np.ndarray
         Accumulated PSD power, shape ``(n_lfp_bins, n_channels)``.
-    shank_info : dict
-        Per-shank channel indices and depth ordering.
     n_windows : int
         Number of FFT windows that were accumulated.
     window_power : float
@@ -107,25 +110,16 @@ def _normalize_spectral_estimates(
     psd_power = psd_full
     psd_freqs = lfp_freqs[lfp_mask].astype(np.float32)
 
-    # --- Normalize coherency per shank ---
+    # --- Normalize coherency over the full ephys collection ---
     correlation = {}
     complex_coherency = {}
     for band_name in bands:
         S = Sij[band_name] / n_windows
-        for group_val, info in shank_info.items():
-            idx = info["indices"]
-            order = info["depth_order"]
-            S_shank = S[np.ix_(idx[order], idx[order])]
-            d = np.sqrt(np.maximum(np.real(np.diag(S_shank)), 0.0))
-            d[d == 0] = 1.0
-            coherency = S_shank / np.outer(d, d)
-            shank_index = int(group_val) + 1
-            correlation[(band_name, shank_index)] = np.real(coherency).astype(
-                np.float32
-            )
-            complex_coherency[(band_name, shank_index)] = coherency.astype(
-                np.complex64
-            )
+        d = np.sqrt(np.maximum(np.real(np.diag(S)), 0.0))
+        d[d == 0] = 1.0
+        coherency = S / np.outer(d, d)
+        correlation[band_name] = np.real(coherency).astype(np.float32)
+        complex_coherency[band_name] = coherency.astype(np.complex64)
 
     return psd_power, psd_freqs, correlation, complex_coherency
 
@@ -230,10 +224,7 @@ def _compute_all_metrics(  # noqa: C901
     rms_correction = np.sqrt(lfp_window_samples / window_power)
 
     # Channel group / shank info (from the LFP source)
-    try:
-        channel_groups = lfp_src.get_property("group")
-    except Exception:
-        channel_groups = np.zeros(lfp_src.get_num_channels(), dtype=int)
+    channel_groups = normalized_channel_groups(lfp_src)
     channel_locations = lfp_src.get_channel_locations()
     unique_groups = np.unique(channel_groups)
     shank_info = {}
@@ -353,7 +344,6 @@ def _compute_all_metrics(  # noqa: C901
         _normalize_spectral_estimates(
             Sij,
             psd_accum,
-            shank_info,
             n_windows,
             window_power,
             fs_lfp,
@@ -371,6 +361,7 @@ def _compute_all_metrics(  # noqa: C901
         shank_channels.append(
             ShankChannels(
                 shank_index=int(group_val) + 1,
+                channel_indices=idx[order].astype(np.int64, copy=True),
                 locations=channel_locations[idx[order]].copy(),
             )
         )
@@ -393,101 +384,85 @@ def _compute_all_metrics(  # noqa: C901
 
 def _build_channel_maps(
     results: list[BlockMetrics],
-) -> tuple[np.ndarray, list[np.ndarray], int]:
+) -> tuple[ChannelTable, list[np.ndarray], int]:
     """Build channel index maps for combining blocks with overlapping channels.
 
     Returns
     -------
-    unique_locs : np.ndarray
-        Unique channel locations, shape ``(n_unique, 2)``.
+    channel_table : ChannelTable
+        Unique channel metadata in canonical table order.
     block_channel_maps : list[np.ndarray]
         Per-block arrays mapping each block channel to its index in
-        ``unique_locs``.
+        ``channel_table``.
     total_n_channels : int
         Number of unique channels.
     """
-    all_locs = []
-    for r in results:
-        all_locs.append(r.block.recording.get_channel_locations())
-    concat_locs = np.concatenate(all_locs, axis=0)
-
-    _, unique_idx = np.unique(concat_locs, axis=0, return_index=True)
-    unique_idx = np.sort(unique_idx)
-    unique_locs = concat_locs[unique_idx]
-    total_n_channels = len(unique_locs)
-
-    block_channel_maps = []
-    for locs in all_locs:
-        ch_map = np.empty(len(locs), dtype=int)
-        for i, loc in enumerate(locs):
-            matches = np.where(
-                np.all(np.abs(unique_locs - loc) < 1e-6, axis=1)
-            )[0]
-            ch_map[i] = matches[0] if len(matches) > 0 else i
-        block_channel_maps.append(ch_map)
-
-    return unique_locs, block_channel_maps, total_n_channels
+    recordings = [r.block.recording for r in results]
+    channel_table, block_channel_maps = build_channel_table(recordings)
+    return channel_table, block_channel_maps, len(channel_table.raw_ind)
 
 
-def _build_shank_channel_maps(
+def _build_row_channels_metadata(
     results: list[BlockMetrics],
-    shank_index: int,
-) -> tuple[list[np.ndarray | None], int]:
-    """Build per-shank channel maps for assembling coherence matrices.
-
-    Uses the ``ShankChannels`` metadata already stored on each
-    ``BlockMetrics`` (computed during ``_compute_all_metrics``),
-    avoiding any re-reading from recordings.
-
-    Returns
-    -------
-    shank_maps : list[np.ndarray | None]
-        Per-block arrays mapping each block's shank-channel row/col
-        to its index in the unified shank channel set.  ``None`` if
-        the block has no channels on this shank.
-    n_unique : int
-        Total unique channels on this shank across all blocks.
-    """
-    # Collect per-block shank locations from stored metadata
-    per_block_locs: list[np.ndarray | None] = []
-    for r in results:
-        match = [
-            sc for sc in r.shank_channels if sc.shank_index == shank_index
-        ]
-        per_block_locs.append(match[0].locations if match else None)
-
-    # Build unified unique locations for this shank
-    valid_locs = [loc for loc in per_block_locs if loc is not None]
-    if not valid_locs:
-        return [None] * len(results), 0
-    concat = np.concatenate(valid_locs, axis=0)
-    _, unique_idx = np.unique(concat, axis=0, return_index=True)
-    unique_idx = np.sort(unique_idx)
-    unique_shank_locs = concat[unique_idx]
-    n_unique = len(unique_shank_locs)
-
-    # Map each block's shank channels to unified indices
-    shank_maps: list[np.ndarray | None] = []
-    for locs in per_block_locs:
-        if locs is None:
-            shank_maps.append(None)
-            continue
-        ch_map = np.empty(len(locs), dtype=int)
-        for i, loc in enumerate(locs):
-            matches = np.where(
-                np.all(np.abs(unique_shank_locs - loc) < 1e-6, axis=1)
-            )[0]
-            ch_map[i] = matches[0]
-        shank_maps.append(ch_map)
-
-    return shank_maps, n_unique
+    block_channel_maps: list[np.ndarray],
+    channel_table: ChannelTable,
+    main_recording_min_secs: float = 600.0,
+) -> dict:
+    """Build the self-describing row map for saved full matrices."""
+    all_shanks = sorted(
+        {sc.shank_index for result in results for sc in result.shank_channels}
+    )
+    shanks = {}
+    for shank_index in all_shanks:
+        shank_ind = shank_index - 1
+        shank_rows = depth_sorted_shank_rows(channel_table, shank_ind)
+        block_entries = []
+        for block_idx, (result, block_map) in enumerate(
+            zip(results, block_channel_maps, strict=True)
+        ):
+            match = [
+                sc
+                for sc in result.shank_channels
+                if sc.shank_index == shank_index
+            ]
+            if not match:
+                continue
+            rec = result.block.recording
+            label = (
+                "main"
+                if rec.get_duration() >= main_recording_min_secs
+                else "surface"
+            )
+            rows = block_map[match[0].channel_indices].astype(int).tolist()
+            block_entries.append(
+                {
+                    "block_index": block_idx,
+                    "label": label,
+                    "rows": rows,
+                    "n_channels": len(rows),
+                    "duration_s": float(rec.get_duration()),
+                }
+            )
+        shanks[str(shank_ind)] = {
+            "rows": shank_rows.astype(int).tolist(),
+            "legacy_file_index": shank_index,
+            "blocks": block_entries,
+        }
+    return {
+        "version": 2,
+        "matrix_rows": np.arange(
+            len(channel_table.raw_ind), dtype=int
+        ).tolist(),
+        "matrix_row_order": "channel_table",
+        "shanks": shanks,
+    }
 
 
 def _assemble_blockwise_coherence(
     results: list[BlockMetrics],
     main_recording_min_secs: float = 600.0,
 ) -> dict:
-    """Assemble per-block coherence into block-diagonal matrices.
+    """Assemble per-block coherence into full channel-table matrices.
 
     Parameters
     ----------
@@ -502,56 +477,38 @@ def _assemble_blockwise_coherence(
         ``correlation``, ``coherency``, ``psd_power``, ``psd_freqs``,
         ``channel_blocks``
     """
-    unique_locs, block_channel_maps, total_n_channels = _build_channel_maps(
+    channel_table, block_channel_maps, total_n_channels = _build_channel_maps(
         results
     )
 
-    # Find all band/shank keys and unique shank indices
-    all_keys = set()
-    all_shanks = set()
-    for result in results:
-        all_keys.update(result.correlation.keys())
-        all_shanks.update(s for _, s in result.correlation.keys())
-
-    # Build per-shank channel maps once
-    shank_maps_cache = {}
-    for shank_idx in all_shanks:
-        shank_maps_cache[shank_idx] = _build_shank_channel_maps(
-            results, shank_idx
-        )
-
-    # Assemble per-shank with n_windows-weighted averaging for overlaps
+    # Assemble full matrices with n_windows-weighted averaging for overlaps.
     combined_correlation = {}
     combined_coherency = {}
-    for key in all_keys:
-        band_name, shank_idx = key
-        shank_maps, n_shank_channels = shank_maps_cache[shank_idx]
-        if n_shank_channels == 0:
-            continue
-
+    all_bands = {band for result in results for band in result.correlation}
+    for band_name in all_bands:
         corr_mat = np.zeros(
-            (n_shank_channels, n_shank_channels), dtype=np.float32
+            (total_n_channels, total_n_channels), dtype=np.float32
         )
         coh_mat = np.zeros(
-            (n_shank_channels, n_shank_channels), dtype=np.complex64
+            (total_n_channels, total_n_channels), dtype=np.complex64
         )
         weight = np.zeros(
-            (n_shank_channels, n_shank_channels), dtype=np.float32
+            (total_n_channels, total_n_channels), dtype=np.float32
         )
-        for s_map, result in zip(shank_maps, results):
-            if s_map is None or key not in result.correlation:
+        for ch_map, result in zip(block_channel_maps, results, strict=True):
+            if band_name not in result.correlation:
                 continue
             n_win = result.rms_ap.shape[0]
-            block_corr = result.correlation[key]
-            block_coh = result.coherency[key]
-            corr_mat[np.ix_(s_map, s_map)] += block_corr * n_win
-            coh_mat[np.ix_(s_map, s_map)] += block_coh * n_win
-            weight[np.ix_(s_map, s_map)] += n_win
+            block_corr = result.correlation[band_name]
+            block_coh = result.coherency[band_name]
+            corr_mat[np.ix_(ch_map, ch_map)] += block_corr * n_win
+            coh_mat[np.ix_(ch_map, ch_map)] += block_coh * n_win
+            weight[np.ix_(ch_map, ch_map)] += n_win
         mask = weight > 0
         corr_mat[mask] /= weight[mask]
         coh_mat[mask] /= weight[mask]
-        combined_correlation[key] = corr_mat
-        combined_coherency[key] = coh_mat
+        combined_correlation[band_name] = corr_mat
+        combined_coherency[band_name] = coh_mat
 
     # PSD: assemble with n_windows-weighted averaging for overlaps
     n_lfp_freqs = results[0].psd_power.shape[0]
@@ -591,4 +548,10 @@ def _assemble_blockwise_coherence(
         "psd_power": combined_psd,
         "psd_freqs": results[0].psd_freqs,
         "channel_blocks": channel_blocks_meta,
+        "row_channels": _build_row_channels_metadata(
+            results,
+            block_channel_maps,
+            channel_table,
+            main_recording_min_secs=main_recording_min_secs,
+        ),
     }

@@ -57,10 +57,20 @@ class ProbeStream:
 
 
 @dataclass
+class ChannelTable:
+    """Per-probe channel metadata in canonical output order."""
+
+    raw_ind: np.ndarray  # legacy positional rawInd, unchanged for now
+    local_coordinates: np.ndarray  # (n_channels, 2)
+    shank_ind: np.ndarray  # 0-based normalized shank index per channel
+
+
+@dataclass
 class ShankChannels:
     """Per-shank channel metadata from one block (depth-sorted)."""
 
-    shank_index: int  # 1-based, matches correlation/coherency key
+    shank_index: int  # 1-based legacy file suffix; shankInd is 0-based
+    channel_indices: np.ndarray  # block channel indices, depth-sorted
     locations: np.ndarray  # (n_shank_channels, 2), depth-sorted
 
 
@@ -72,8 +82,8 @@ class BlockMetrics:
     rms_ap: np.ndarray  # (n_windows, n_channels)
     rms_lfp: np.ndarray  # (n_windows, n_channels)
     timestamps: np.ndarray  # (n_windows,)
-    correlation: dict  # (band, shank_idx) -> (n_ch, n_ch)
-    coherency: dict  # (band, shank_idx) -> complex (n_ch, n_ch)
+    correlation: dict  # band -> full real coherency matrix
+    coherency: dict  # band -> full complex coherency matrix
     psd_power: np.ndarray  # (n_lfp_freqs, n_channels)
     psd_freqs: np.ndarray  # (n_lfp_freqs,)
     shank_channels: list[ShankChannels]  # per-shank channel info

@@ -8,9 +8,13 @@ from pathlib import Path
 import numpy as np
 import spikeinterface as si
 
+from aind_ephys_ibl_gui_conversion.channel_metadata import (
+    build_channel_table,
+)
 from aind_ephys_ibl_gui_conversion.metrics import (
     _assemble_blockwise_coherence,
     _build_channel_maps,
+    _build_row_channels_metadata,
     _compute_all_metrics,
 )
 from aind_ephys_ibl_gui_conversion.recording_utils import (
@@ -258,10 +262,9 @@ def _save_spectral_outputs(
 ) -> None:
     """Save PSD, correlation, and coherency from one or more blocks.
 
-    When ``len(results) > 1``, assembles block-diagonal coherence
-    via ``_assemble_blockwise_coherence`` and writes
-    ``channel_blocks.json``.  When ``len(results) == 1``, saves
-    directly from the single result (no assembly needed).
+    Full correlation/coherency matrices are saved in channel-table order.
+    Shank-suffixed files are compatibility views sliced from those full
+    matrices using ``row_channels.json``.
     """
     if len(results) > 1:
         assembled = _assemble_blockwise_coherence(results)
@@ -270,6 +273,7 @@ def _save_spectral_outputs(
         correlation = assembled["correlation"]
         coherency = assembled["coherency"]
         channel_blocks = assembled["channel_blocks"]
+        row_channels = assembled["row_channels"]
     else:
         r = results[0]
         psd_power = r.psd_power
@@ -277,6 +281,10 @@ def _save_spectral_outputs(
         correlation = r.correlation
         coherency = r.coherency
         channel_blocks = None
+        channel_table, block_maps, _ = _build_channel_maps(results)
+        row_channels = _build_row_channels_metadata(
+            results, block_maps, channel_table
+        )
 
     np.save(
         output_folder / "_iblqc_ephysSpectralDensityLF.power.npy",
@@ -289,20 +297,51 @@ def _save_spectral_outputs(
 
     band_corr_folder = output_folder / "band_corr"
     band_corr_folder.mkdir(exist_ok=True)
-    for (band_name, shank_idx), corr_mat in correlation.items():
-        np.save(
-            band_corr_folder / f"{band_name}_shank{shank_idx}_mean_corr.npy",
-            corr_mat,
-        )
-    for (band_name, shank_idx), coh_mat in coherency.items():
-        np.save(
-            band_corr_folder / f"{band_name}_shank{shank_idx}_coherency.npy",
-            coh_mat,
-        )
+    _save_band_corr_matrices(
+        band_corr_folder=band_corr_folder,
+        correlation=correlation,
+        coherency=coherency,
+        row_channels=row_channels,
+    )
+
+    with open(band_corr_folder / "row_channels.json", "w") as f:
+        json.dump(row_channels, f, indent=2)
 
     if channel_blocks is not None:
         with open(band_corr_folder / "channel_blocks.json", "w") as f:
             json.dump({"blocks": channel_blocks}, f, indent=2)
+
+
+def _save_band_corr_matrices(
+    band_corr_folder: Path,
+    correlation: dict[str, np.ndarray],
+    coherency: dict[str, np.ndarray],
+    row_channels: dict,
+) -> None:
+    """Save full band matrices plus legacy per-shank compatibility views."""
+    shanks = row_channels.get("shanks", {})
+
+    for band_name, corr_mat in correlation.items():
+        np.save(band_corr_folder / f"{band_name}_mean_corr.npy", corr_mat)
+        for shank in shanks.values():
+            rows = np.asarray(shank["rows"], dtype=np.int64)
+            legacy_file_index = int(shank["legacy_file_index"])
+            np.save(
+                band_corr_folder
+                / f"{band_name}_shank{legacy_file_index}_mean_corr.npy",
+                corr_mat[np.ix_(rows, rows)],
+            )
+
+    for band_name, coh_mat in coherency.items():
+        np.save(band_corr_folder / f"{band_name}_coherency.npy", coh_mat)
+        for shank in shanks.values():
+            rows = np.asarray(shank["rows"], dtype=np.int64)
+            legacy_file_index = int(shank["legacy_file_index"])
+            np.save(
+                band_corr_folder
+                / f"{band_name}_shank{legacy_file_index}_coherency.npy",
+                coh_mat[np.ix_(rows, rows)],
+            )
 
 
 def _save_method_metadata(
@@ -339,24 +378,19 @@ def _save_channel_metadata(
     output_folder: Path,
     recordings: list[si.BaseRecording],
 ) -> None:
-    """Save deduplicated channel locations and indices.
+    """Save deduplicated channel locations, legacy indices, and shanks.
 
     When blocks have overlapping channels (same physical position),
     only one copy of each unique (x, y) location is saved.
     """
-    all_locs = np.concatenate(
-        [r.get_channel_locations() for r in recordings], axis=0
-    )
-    # Deduplicate, preserving first-occurrence order
-    _, unique_idx = np.unique(all_locs, axis=0, return_index=True)
-    unique_idx = np.sort(unique_idx)
-    unique_locs = all_locs[unique_idx]
+    channel_table, _ = build_channel_table(recordings)
 
-    np.save(output_folder / "channels.localCoordinates.npy", unique_locs)
     np.save(
-        output_folder / "channels.rawInd.npy",
-        np.arange(unique_locs.shape[0]),
+        output_folder / "channels.localCoordinates.npy",
+        channel_table.local_coordinates,
     )
+    np.save(output_folder / "channels.rawInd.npy", channel_table.raw_ind)
+    np.save(output_folder / "channels.shankInd.npy", channel_table.shank_ind)
 
 
 def _assemble_and_save_stream(
@@ -466,23 +500,18 @@ def process_stream_fft(
         )
         band_corr_folder = output_folder / "band_corr"
         band_corr_folder.mkdir(exist_ok=True)
-        for (band_name, shank_idx), corr in metrics.correlation.items():
-            np.save(
-                band_corr_folder
-                / f"{band_name}_shank{shank_idx}_mean_corr.npy",
-                corr,
-            )
-        for (band_name, shank_idx), coh in metrics.coherency.items():
-            np.save(
-                band_corr_folder
-                / f"{band_name}_shank{shank_idx}_coherency.npy",
-                coh,
-            )
+        channel_table, block_maps, _ = _build_channel_maps([metrics])
+        row_channels = _build_row_channels_metadata(
+            [metrics], block_maps, channel_table
+        )
+        _save_band_corr_matrices(
+            band_corr_folder=band_corr_folder,
+            correlation=metrics.correlation,
+            coherency=metrics.coherency,
+            row_channels=row_channels,
+        )
+        with open(band_corr_folder / "row_channels.json", "w") as f:
+            json.dump(row_channels, f, indent=2)
 
     if save_channel_metadata:
-        locs = block.recording.get_channel_locations()
-        np.save(output_folder / "channels.localCoordinates.npy", locs)
-        np.save(
-            output_folder / "channels.rawInd.npy",
-            np.arange(locs.shape[0]),
-        )
+        _save_channel_metadata(output_folder, [block.recording])

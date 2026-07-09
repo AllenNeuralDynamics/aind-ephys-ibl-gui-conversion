@@ -4,6 +4,7 @@ Tests for FFT-based ephys metric computation.
 Unit tests use synthetic data. Integration test uses a real zarr from S3.
 """
 
+import json
 import tempfile
 from pathlib import Path
 
@@ -29,6 +30,8 @@ def _make_synthetic_recording(
     fs: float = 30000.0,
     n_channels: int = 32,
     freqs_hz: list[float] | None = None,
+    groups: np.ndarray | None = None,
+    locations: np.ndarray | None = None,
 ):
     """Create a mock SI-like recording backed by a numpy array."""
     import spikeinterface as si
@@ -55,12 +58,15 @@ def _make_synthetic_recording(
     )
 
     # Set channel locations (depth along y-axis)
-    locations = np.zeros((n_channels, 2))
-    locations[:, 1] = np.arange(n_channels) * 20.0  # 20 um spacing
+    if locations is None:
+        locations = np.zeros((n_channels, 2))
+        locations[:, 1] = np.arange(n_channels) * 20.0  # 20 um spacing
     recording.set_property("location", locations)
 
-    # Set group (all one shank)
-    recording.set_property("group", np.zeros(n_channels, dtype=int))
+    # Set channel group / shank metadata.
+    if groups is None:
+        groups = np.zeros(n_channels, dtype=int)
+    recording.set_property("group", np.asarray(groups, dtype=int))
 
     return recording, traces
 
@@ -249,13 +255,40 @@ class TestCoherenceAndPsd:
         )
 
         for band_name in COHERENCE_BANDS:
-            key = (band_name, 1)
-            assert key in result.correlation
-            corr = result.correlation[key]
+            assert band_name in result.correlation
+            corr = result.correlation[band_name]
             assert corr.shape == (32, 32)
             np.testing.assert_allclose(np.diag(corr), 1.0, atol=0.05)
             assert np.all(corr >= -1.0 - 1e-6)
             assert np.all(corr <= 1.0 + 1e-6)
+
+    def test_multi_shank_correlation_is_full_matrix(self):
+        """Pairwise metrics are full collection matrices, not per-shank."""
+        groups = np.repeat([0, 1], 4)
+        locations = np.zeros((8, 2))
+        locations[:, 0] = groups * 250.0
+        locations[:, 1] = np.tile(np.arange(4) * 20.0, 2)
+        recording, _ = _make_synthetic_recording(
+            duration_sec=6.0,
+            fs=2500.0,
+            n_channels=8,
+            groups=groups,
+            locations=locations,
+        )
+        block = ExperimentBlock(
+            recording=recording, lfp_recording=None, block_index=0
+        )
+
+        result = _compute_all_metrics(
+            block,
+            window_interval=2.0,
+            window_duration=2.0,
+        )
+
+        for band_name in COHERENCE_BANDS:
+            assert result.correlation[band_name].shape == (8, 8)
+            assert result.coherency[band_name].shape == (8, 8)
+        assert [s.shank_index for s in result.shank_channels] == [1, 2]
 
     def test_coherency_is_complex(self):
         """Complex coherency should have magnitude <= 1."""
@@ -313,11 +346,67 @@ class TestProcessStreamFft:
             band_corr = output / "band_corr"
             assert band_corr.is_dir()
             for band in COHERENCE_BANDS:
+                assert (band_corr / f"{band}_mean_corr.npy").exists()
+                assert (band_corr / f"{band}_coherency.npy").exists()
                 assert (band_corr / f"{band}_shank1_mean_corr.npy").exists()
+                assert (band_corr / f"{band}_shank1_coherency.npy").exists()
+
+            row_channels_path = band_corr / "row_channels.json"
+            assert row_channels_path.exists()
+            with open(row_channels_path) as f:
+                row_channels = json.load(f)
+            assert row_channels["version"] == 2
+            assert row_channels["matrix_row_order"] == "channel_table"
+            assert row_channels["matrix_rows"] == list(range(32))
+            assert row_channels["shanks"]["0"]["rows"] == list(range(32))
 
             # Check channel metadata
             assert (output / "channels.localCoordinates.npy").exists()
             assert (output / "channels.rawInd.npy").exists()
+            assert (output / "channels.shankInd.npy").exists()
+
+    def test_writes_multi_shank_geometry_contract(self):
+        """Saved outputs include full matrices and explicit shank row maps."""
+        groups = np.repeat([0, 1], 4)
+        locations = np.zeros((8, 2))
+        locations[:, 0] = groups * 250.0
+        locations[:, 1] = np.tile(np.arange(4) * 20.0, 2)
+        recording, _ = _make_synthetic_recording(
+            duration_sec=6.0,
+            fs=2500.0,
+            n_channels=8,
+            groups=groups,
+            locations=locations,
+        )
+        block = ExperimentBlock(
+            recording=recording, lfp_recording=None, block_index=0
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir)
+            process_stream_fft(
+                block,
+                output,
+                compute_coherence=True,
+                rms_window_interval=2.0,
+                rms_window_duration=2.0,
+            )
+
+            band_corr = output / "band_corr"
+            full_corr = np.load(band_corr / "theta_mean_corr.npy")
+            shank1_corr = np.load(band_corr / "theta_shank1_mean_corr.npy")
+            shank2_corr = np.load(band_corr / "theta_shank2_mean_corr.npy")
+            assert full_corr.shape == (8, 8)
+            assert shank1_corr.shape == (4, 4)
+            assert shank2_corr.shape == (4, 4)
+
+            np.testing.assert_array_equal(
+                np.load(output / "channels.shankInd.npy"), groups
+            )
+            with open(band_corr / "row_channels.json") as f:
+                row_channels = json.load(f)
+            assert row_channels["shanks"]["0"]["rows"] == [0, 1, 2, 3]
+            assert row_channels["shanks"]["1"]["rows"] == [4, 5, 6, 7]
 
     def test_main_tag_no_coherence(self):
         """Test tagged output without coherence."""

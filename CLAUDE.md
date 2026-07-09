@@ -107,7 +107,8 @@ Open Ephys stream IDs follow
 - **Multi-block recordings**: When `probe_surface_finding` is provided,
   recordings include surface-finding blocks in addition to the main block.
   `ProbeStream.has_surface` flags this; output filenames gain a `Main` infix
-  and `band_corr/channel_blocks.json` is written.
+  and `band_corr/row_channels.json` maps full matrices to channel-table rows.
+  `band_corr/channel_blocks.json` is retained as a legacy multi-block alias.
 - **FFT-based metrics**: RMS is computed via Parseval's theorem
   (band-limited integration of the PSD) rather than time-domain filtering.
   See `metrics._parseval_rms()` and `_compute_all_metrics()`.

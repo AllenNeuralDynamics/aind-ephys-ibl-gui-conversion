@@ -152,11 +152,15 @@ format.
 | `_iblqc_ephysTimeRmsLF*.timestamps.npy` | Window centers (s) |
 | `_iblqc_ephysSpectralDensityLF.power.npy` | PSD (V^2/Hz), shape (n_freqs, n_channels) |
 | `_iblqc_ephysSpectralDensityLF.freqs.npy` | Frequencies (Hz) |
-| `band_corr/<band>_shank<i>_mean_corr.npy` | Per-band, per-shank correlation matrices (real, power-normalized) |
-| `band_corr/<band>_shank<i>_coherency.npy` | Per-band, per-shank complex coherency |
-| `band_corr/channel_blocks.json` | Multi-block channel map (only if surface-finding blocks are present) |
+| `band_corr/<band>_mean_corr.npy` | Full per-band correlation matrix in channel-table row order |
+| `band_corr/<band>_coherency.npy` | Full per-band complex coherency matrix in channel-table row order |
+| `band_corr/<band>_shank<i>_mean_corr.npy` | Per-shank compatibility view sliced from the full matrix |
+| `band_corr/<band>_shank<i>_coherency.npy` | Per-shank compatibility view sliced from the full matrix |
+| `band_corr/row_channels.json` | Matrix row-to-channel table map (always written) |
+| `band_corr/channel_blocks.json` | Legacy multi-block channel map (only if surface-finding blocks are present) |
 | `channels.localCoordinates.npy` | Unique channel positions (x, y) |
-| `channels.rawInd.npy` | Channel indices |
+| `channels.rawInd.npy` | Legacy positional channel indices |
+| `channels.shankInd.npy` | 0-based shank index per channel-table row |
 | `_iblqc_metrics.method.json` | Method metadata (FFT params, CMR flag) |
 
 ## Metrics method
