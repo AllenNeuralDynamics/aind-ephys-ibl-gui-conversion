@@ -15,6 +15,67 @@ from aind_ephys_ibl_gui_conversion.recording_utils import (
 )
 
 
+def _find_analyzer_folder(
+    postprocessed_folder: Path,
+    stream_name: str,
+    shank_index: int | None = None,
+) -> Path | None:
+    """Locate a sorting-analyzer folder for a stream (and optional shank).
+
+    The recording index in the folder name is not fixed: some sessions
+    produce ``recording1`` while others omit the number entirely. This
+    globs for any matching folder rather than assuming ``recording1``.
+
+    Parameters
+    ----------
+    postprocessed_folder : Path
+        The ``postprocessed`` directory to search.
+    stream_name : str
+        Open Ephys stream name to match.
+    shank_index : int or None
+        If given, match the ``group<shank_index>`` suffix (multi-shank).
+
+    Returns
+    -------
+    Path or None
+        The matching folder, or ``None`` if nothing was found.
+    """
+    suffix = f"_group{shank_index}" if shank_index is not None else ""
+    patterns = (
+        f"experiment*_{stream_name}_recording*{suffix}.zarr",
+        f"experiment*_{stream_name}_recording*{suffix}",
+        f"experiment*_{stream_name}{suffix}.zarr",
+        f"experiment*_{stream_name}{suffix}",
+    )
+    for pattern in patterns:
+        matches = sorted(
+            m
+            for m in postprocessed_folder.glob(pattern)
+            # Guard against a shankless pattern matching a group folder.
+            if shank_index is not None or "_group" not in m.name
+        )
+        if matches:
+            return matches[0]
+    return None
+
+
+def _load_analyzer(analyzer_folder: Path):
+    """Load a sorting analyzer, falling back to the waveforms loader.
+
+    Parameters
+    ----------
+    analyzer_folder : Path
+        Path to the analyzer/waveforms folder.
+
+    Returns
+    -------
+    The loaded sorting analyzer.
+    """
+    if analyzer_folder.suffix == ".zarr":
+        return si.load_sorting_analyzer(analyzer_folder)
+    return si.load_sorting_analyzer_or_waveforms(analyzer_folder)
+
+
 def extract_spikes(  # noqa: C901
     sorting_folder: Path,
     results_folder: Path,
@@ -92,59 +153,38 @@ def extract_spikes(  # noqa: C901
         print("Loading sorting analyzer...")
         if num_shanks > 1:
             for shank_index in range(num_shanks):
-                analyzer_folder = (
-                    postprocessed_folder / f"experiment1_{stream_name}_"
-                    f"recording1_group{shank_index}.zarr"
+                analyzer_folder = _find_analyzer_folder(
+                    postprocessed_folder,
+                    stream_name,
+                    shank_index=shank_index,
                 )
+                if analyzer_folder is None:
+                    with open(output_folder / "sorting_error.txt", "w") as f:
+                        f.write(
+                            "No postprocessed sorting "
+                            f"output found for {probe_name}"
+                        )
+                    continue
 
-                if analyzer_folder.is_dir():
-                    analyzer = si.load_sorting_analyzer(analyzer_folder)
-                else:
-                    analyzer_folder = (
-                        postprocessed_folder / f"experiment1_{stream_name}_"
-                        f"recording1_group{shank_index}"
-                    )
-                    if not analyzer_folder.exists():
-                        with open(
-                            output_folder / "sorting_error.txt", "w"
-                        ) as f:
-                            f.write(
-                                "No postprocessed sorting "
-                                f"output found for {probe_name}"
-                            )
-                        continue
-
-                    analyzer = si.load_sorting_analyzer_or_waveforms(
-                        analyzer_folder
-                    )
+                analyzer = _load_analyzer(analyzer_folder)
 
                 if analyzer.get_total_duration() < min_duration_secs:
                     continue
 
                 analyzer_mappings.append(analyzer)
         else:
-            analyzer_folder = (
-                postprocessed_folder
-                / f"experiment1_{stream_name}_recording1.zarr"
+            analyzer_folder = _find_analyzer_folder(
+                postprocessed_folder, stream_name
             )
-            if analyzer_folder.is_dir():
-                analyzer = si.load_sorting_analyzer(analyzer_folder)
-            else:
-                analyzer_folder = (
-                    postprocessed_folder
-                    / f"experiment1_{stream_name}_recording1"
-                )
-                if not analyzer_folder.exists():
-                    with open(output_folder / "sorting_error.txt", "w") as f:
-                        f.write(
-                            "No postprocessed sorting output "
-                            f"found for {probe_name}"
-                        )
-                    continue
+            if analyzer_folder is None:
+                with open(output_folder / "sorting_error.txt", "w") as f:
+                    f.write(
+                        "No postprocessed sorting output "
+                        f"found for {probe_name}"
+                    )
+                continue
 
-                analyzer = si.load_sorting_analyzer_or_waveforms(
-                    analyzer_folder
-                )
+            analyzer = _load_analyzer(analyzer_folder)
             analyzer_mappings.append(analyzer)
 
         phy_folder = scratch_folder / f"{postprocessed_folder.parent.name}_phy"
