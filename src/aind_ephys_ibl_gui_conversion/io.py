@@ -18,6 +18,7 @@ from aind_ephys_ibl_gui_conversion.metrics import (
     _compute_all_metrics,
 )
 from aind_ephys_ibl_gui_conversion.recording_utils import (
+    _stream_matches,
     _stream_to_probe_name,
     get_largest_segment_recordings,
 )
@@ -69,7 +70,7 @@ def load_probe_streams(
     ap_streams = [
         s
         for s in neuropix_streams
-        if "LFP" not in s and (stream_to_use is None or s == stream_to_use)
+        if "LFP" not in s and _stream_matches(s, stream_to_use)
     ]
 
     # Build list of all zarr paths to load in parallel

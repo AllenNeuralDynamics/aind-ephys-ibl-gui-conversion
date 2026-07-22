@@ -8,6 +8,7 @@ from spikeinterface.extractors import toy_example
 
 from aind_ephys_ibl_gui_conversion.recording_utils import (
     _merge_separate_asset_recording_dicts,
+    _stream_matches,
     _stream_to_probe_name,
     get_largest_segment_recordings,
     get_main_recording_from_list,
@@ -120,6 +121,40 @@ class TestStreamToProbeNameFunction(unittest.TestCase):
         expected = "Probe1A"
         result = _stream_to_probe_name(stream_name)
         self.assertEqual(result, expected)
+
+
+class TestStreamMatchesFunction(unittest.TestCase):
+    """Test cases for the _stream_matches filter predicate."""
+
+    def test_none_filter_selects_all(self):
+        """A None filter selects every stream."""
+        stream_name = "Record Node 104#Neuropix-PXI-100.ProbeA-AP"
+        self.assertTrue(_stream_matches(stream_name, None))
+
+    def test_exact_stream_name_matches(self):
+        """The full Open Ephys stream name selects itself."""
+        stream_name = "Record Node 104#Neuropix-PXI-100.ProbeA-AP"
+        self.assertTrue(_stream_matches(stream_name, stream_name))
+
+    def test_probe_token_matches_ap_stream(self):
+        """The probe/collection token selects the AP stream."""
+        stream_name = "Record Node 104#Neuropix-PXI-100.ProbeA-AP"
+        self.assertTrue(_stream_matches(stream_name, "ProbeA"))
+
+    def test_probe_token_matches_paired_lfp_stream(self):
+        """The token drops the suffix, so it also selects the LFP stream."""
+        stream_name = "Record Node 104#Neuropix-PXI-100.ProbeA-LFP"
+        self.assertTrue(_stream_matches(stream_name, "ProbeA"))
+
+    def test_wrong_token_does_not_match(self):
+        """A token for a different probe is not selected."""
+        stream_name = "Record Node 104#Neuropix-PXI-100.ProbeA-AP"
+        self.assertFalse(_stream_matches(stream_name, "ProbeB"))
+
+    def test_numeric_probe_token_matches(self):
+        """A numeric probe/collection token selects its stream."""
+        stream_name = "Record Node 109#Neuropix-PXI-100.45883-1"
+        self.assertTrue(_stream_matches(stream_name, "45883-1"))
 
 
 class TestRecordingUtils(unittest.TestCase):

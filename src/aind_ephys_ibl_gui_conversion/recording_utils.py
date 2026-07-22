@@ -57,6 +57,37 @@ def _stream_to_probe_name(stream_name: str) -> str | None:
     return None
 
 
+def _stream_matches(stream_name: str, stream_to_use: str | None) -> bool:
+    """Return whether ``stream_name`` passes a ``stream_to_use`` filter.
+
+    A ``stream_to_use`` of ``None`` selects every stream. Otherwise a stream is
+    selected when the filter equals either the full Open Ephys stream name
+    (e.g. ``"Record Node 104#Neuropix-PXI-100.ProbeA-AP"``) **or** the derived
+    probe/collection token (``_stream_to_probe_name(stream_name)``, e.g.
+    ``"ProbeA"``). Accepting the token lets callers filter by the ALF ephys
+    collection they already hold without first resolving it to the exact neo
+    stream name -- and because the token drops the ``-AP``/``-LFP`` suffix, an
+    ``"AP"`` filter also selects the paired LFP stream.
+
+    Parameters
+    ----------
+    stream_name : str
+        Full Open Ephys neo stream name.
+    stream_to_use : str or None
+        Filter: the exact stream name, the probe/collection token, or ``None``
+        to accept all streams.
+
+    Returns
+    -------
+    bool
+    """
+    if stream_to_use is None:
+        return True
+    if stream_name == stream_to_use:
+        return True
+    return _stream_to_probe_name(stream_name) == stream_to_use
+
+
 def get_ecephys_stream_names(
     base_folder,
 ) -> tuple[list[str], object, int]:

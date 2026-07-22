@@ -105,7 +105,9 @@ def extract_continuous(
     results_folder : Path
         Path where output files will be saved.
     stream_to_use : str or None
-        If provided, only process this stream.
+        If provided, only process this stream. Accepts either the full
+        Open Ephys stream name or the probe/collection token (e.g.
+        ``"ProbeA"``); the token also selects the paired LFP stream.
     main_recording_min_secs : int
         Minimum duration (seconds) to classify as main recording.
     probe_surface_finding : Path or None

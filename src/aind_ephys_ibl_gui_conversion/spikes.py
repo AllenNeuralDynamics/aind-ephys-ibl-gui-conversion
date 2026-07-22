@@ -10,6 +10,7 @@ import spikeinterface.extractors as se
 from spikeinterface.exporters import export_to_phy
 
 from aind_ephys_ibl_gui_conversion.recording_utils import (
+    _stream_matches,
     _stream_to_probe_name,
 )
 
@@ -29,7 +30,9 @@ def extract_spikes(  # noqa: C901
     results_folder : Path
         Path where extracted spike data will be saved.
     stream_to_use : str or None
-        If provided, only process this stream.
+        If provided, only process this stream. Accepts either the full
+        Open Ephys stream name or the probe/collection token (e.g.
+        ``"ProbeA"``); the token also selects the paired LFP stream.
     min_duration_secs : int
         Minimum duration (seconds) for spike extraction.
     """
@@ -63,7 +66,7 @@ def extract_spikes(  # noqa: C901
         )
 
     for idx, stream_name in enumerate(neuropix_streams):
-        if stream_to_use is not None and stream_name != stream_to_use:
+        if not _stream_matches(stream_name, stream_to_use):
             continue
 
         analyzer_mappings = []
