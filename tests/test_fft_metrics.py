@@ -10,7 +10,10 @@ from pathlib import Path
 
 import numpy as np
 
-from aind_ephys_ibl_gui_conversion.channel_metadata import build_channel_table
+from aind_ephys_ibl_gui_conversion.channel_metadata import (
+    build_channel_table,
+    normalized_channel_groups,
+)
 from aind_ephys_ibl_gui_conversion.io import (
     process_stream_fft,
 )
@@ -534,6 +537,57 @@ class TestProcessStreamFft:
         )
         np.testing.assert_array_equal(block_maps[0], np.array([0, 1]))
         np.testing.assert_array_equal(block_maps[1], np.array([2, 3]))
+
+    def test_normalized_channel_groups_prefers_contact_id_shank(self):
+        """Flat group + shank-prefixed contact ids -> physical shank wins.
+
+        Surface-finding blocks often report a flat ``group`` (all 0) even
+        though they span every shank; the physical shank must come from the
+        contact id prefix.
+        """
+        rec = _FakeRecording(
+            locations=np.array(
+                [[0.0, 0.0], [0.0, 20.0], [250.0, 0.0], [250.0, 20.0]]
+            ),
+            groups=np.array([0, 0, 0, 0]),
+            contact_ids=np.array(["s0e0", "s0e1", "s1e0", "s1e1"]),
+        )
+        np.testing.assert_array_equal(
+            normalized_channel_groups(rec), np.array([0, 0, 1, 1])
+        )
+
+    def test_channel_table_surface_finding_flat_group_uses_contact_shank(self):
+        """Surface block with flat group must not collapse shanks.
+
+        Reproduces the 4-shank surface-finding defect where the surface block's
+        flat ``group`` (a) labeled every shank's channels as shank 0 and (b)
+        failed to dedup the same physical contact against the main block,
+        leaving shanks 2-4 with only a redundant bottom-bank slice.
+        """
+        contact_ids = np.array(["s0e0", "s0e1", "s1e0", "s1e1"])
+        locations = np.array(
+            [[0.0, 0.0], [0.0, 20.0], [250.0, 0.0], [250.0, 20.0]]
+        )
+        surface = _FakeRecording(  # flat group across all shanks
+            locations=locations,
+            groups=np.array([0, 0, 0, 0]),
+            contact_ids=contact_ids,
+        )
+        main = _FakeRecording(  # correct per-shank groups
+            locations=locations,
+            groups=np.array([0, 0, 1, 1]),
+            contact_ids=contact_ids,
+        )
+
+        table, block_maps = build_channel_table([surface, main])
+
+        # Same physical contacts across blocks dedup to 4 rows (not 6).
+        assert table.local_coordinates.shape[0] == 4
+        np.testing.assert_array_equal(table.contact_id, contact_ids)
+        # shank_ind follows the contact-id physical shank, not the flat group.
+        np.testing.assert_array_equal(table.shank_ind, np.array([0, 0, 1, 1]))
+        np.testing.assert_array_equal(block_maps[0], np.array([0, 1, 2, 3]))
+        np.testing.assert_array_equal(block_maps[1], np.array([0, 1, 2, 3]))
 
     def test_main_tag_no_coherence(self):
         """Test tagged output without coherence."""

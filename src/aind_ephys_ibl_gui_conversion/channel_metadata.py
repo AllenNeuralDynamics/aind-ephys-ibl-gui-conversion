@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 
 import numpy as np
@@ -9,14 +10,58 @@ import spikeinterface as si
 
 from aind_ephys_ibl_gui_conversion.types import ChannelTable
 
+# Multi-shank probeinterface contact ids are ``s{shank}e{elec}`` (e.g.
+# ``s2e17``). The shank prefix is the physical shank and is stable across
+# recording blocks, unlike the recording ``group`` property.
+_SHANK_PREFIX_RE = re.compile(r"^s(\d+)e", re.IGNORECASE)
+
+
+def _shank_from_contact_id(contact_id: object) -> int | None:
+    """Physical 0-based shank encoded in a probeinterface contact id.
+
+    Returns the shank integer parsed from an ``s{shank}e{elec}`` id, or
+    ``None`` when the id is missing or carries no shank prefix.
+    """
+    if contact_id is None:
+        return None
+    match = _SHANK_PREFIX_RE.match(str(contact_id))
+    return int(match.group(1)) if match else None
+
+
+def _shanks_from_contact_ids(contact_ids: np.ndarray) -> np.ndarray | None:
+    """Per-channel physical shank from contact ids, or ``None`` if unusable.
+
+    Requires *every* channel to carry a shank-prefixed contact id; a single
+    missing/unprefixed id means contact ids can't be trusted for shank
+    identity and the caller falls back to the recording ``group``.
+    """
+    shanks = [_shank_from_contact_id(cid) for cid in contact_ids]
+    if any(shank is None for shank in shanks):
+        return None
+    return np.asarray(shanks, dtype=np.int64)
+
 
 def normalized_channel_groups(recording: si.BaseRecording) -> np.ndarray:
-    """Return 0-based contiguous shank groups for a recording's channels.
+    """Return the 0-based physical shank index for a recording's channels.
 
-    SpikeInterface propagates probe shanks through the ``group`` property when
-    probeinterface metadata is available. Missing groups are treated as a
-    single-shank recording.
+    Prefers the shank encoded in probeinterface contact ids
+    (``s{shank}e{elec}``): it is the true physical shank and is consistent
+    across recording blocks. In particular, surface-finding blocks frequently
+    report a *flat* ``group`` property (all channels group 0) even though they
+    span every shank; deriving the shank from ``group`` there collapses all
+    shanks to 0 and, on merge, both mislabels shanks and fails to deduplicate
+    the same physical contact recorded in multiple blocks.
+
+    Falls back to the SpikeInterface ``group`` property (normalized to 0-based
+    contiguous) when contact ids are unavailable/unprefixed, and finally to a
+    single shank.
     """
+    contact_shanks = _shanks_from_contact_ids(
+        normalized_contact_ids(recording)
+    )
+    if contact_shanks is not None:
+        return contact_shanks
+
     try:
         groups = recording.get_property("group")
     except Exception:
@@ -142,6 +187,7 @@ def normalized_contact_ids(recording: si.BaseRecording) -> np.ndarray:
 
 
 def _contact_ids_property(recording: si.BaseRecording) -> np.ndarray | None:
+    """Return per-channel contact ids from the recording, else None."""
     try:
         ids = np.asarray(recording.get_property("contact_ids"))
     except Exception:
@@ -150,6 +196,11 @@ def _contact_ids_property(recording: si.BaseRecording) -> np.ndarray | None:
 
 
 def _valid_contact_ids(ids: np.ndarray, n_channels: int) -> np.ndarray | None:
+    """Validate a 1-D contact-id vector; return string ids or ``None``.
+
+    Rejects wrong-length, missing, NaN/empty, or non-unique ids so callers
+    only stitch blocks on trustworthy per-channel identifiers.
+    """
     if ids is None or ids.ndim != 1 or ids.shape[0] != n_channels:
         return None
     values: list[str] = []
@@ -176,6 +227,11 @@ def _project_contact_ids_by_device_channel(
     device_channel_indices: np.ndarray,
     recording: si.BaseRecording,
 ) -> np.ndarray | None:
+    """Reorder probe contact ids into recording channel order, or ``None``.
+
+    Maps each probe contact to its recording row via the device channel index;
+    returns ``None`` if any recording row is left unresolved.
+    """
     n_channels = recording.get_num_channels()
     if contact_ids.ndim != 1 or device_channel_indices.ndim != 1:
         return None
