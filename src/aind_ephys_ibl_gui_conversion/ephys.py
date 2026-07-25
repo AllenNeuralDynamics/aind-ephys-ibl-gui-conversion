@@ -80,6 +80,7 @@ def extract_continuous(
     rms_window_interval: float = 30.0,
     rms_window_duration: float = 4.0,
     num_parallel_jobs: int = 4,
+    session_folder: Path | None = None,
     # Legacy parameters kept for API compatibility (ignored)
     coherence_duration: float = 60.0,
     coherence_window_duration: float = 2.0,
@@ -118,8 +119,17 @@ def extract_continuous(
         Duration of each window in seconds (LFP metrics + RMS).
     num_parallel_jobs : int
         Number of blocks to process in parallel.
+    session_folder : Path or None
+        Path to the raw session folder (holding ``ecephys_compressed``). If
+        given, it is used directly; otherwise it is derived from
+        ``sorting_folder`` by stripping the ``_sorted...`` suffix, which
+        assumes the raw and sorted folders are siblings. Pass this explicitly
+        when the caller knows the raw folder's location (e.g. a pipeline that
+        mounts raw and sorted assets under unrelated parents) so the sibling
+        assumption is not required.
     """
-    session_folder = Path(str(sorting_folder).split("_sorted")[0])
+    if session_folder is None:
+        session_folder = Path(str(sorting_folder).split("_sorted")[0])
 
     # Enable multi-threaded wavpack decompression if available
     try:
