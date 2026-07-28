@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 import spikeinterface as si
 import spikeinterface.extractors as se
-from spikeinterface.exporters import export_to_phy
 
 from aind_ephys_ibl_gui_conversion.recording_utils import (
     _stream_to_probe_name,
@@ -71,8 +70,10 @@ def _load_analyzer(analyzer_folder: Path):
     The loaded sorting analyzer.
     """
     if analyzer_folder.suffix == ".zarr":
-        return si.load_sorting_analyzer(analyzer_folder)
-    return si.load_sorting_analyzer_or_waveforms(analyzer_folder)
+        analyzer = si.load_sorting_analyzer(analyzer_folder)
+    else:
+        analyzer = si.load_sorting_analyzer_or_waveforms(analyzer_folder)
+    return analyzer
 
 
 def extract_spikes(  # noqa: C901
@@ -95,7 +96,6 @@ def extract_spikes(  # noqa: C901
         Minimum duration (seconds) for spike extraction.
     """
     session_folder = Path(str(sorting_folder).split("_sorted")[0])
-    scratch_folder = Path("/scratch")
 
     ecephys_folder = session_folder / "ecephys_clipped"
     if ecephys_folder.is_dir():
@@ -184,9 +184,7 @@ def extract_spikes(  # noqa: C901
             analyzer = _load_analyzer(analyzer_folder)
             analyzer_mappings.append(analyzer)
 
-        phy_folder = scratch_folder / f"{postprocessed_folder.parent.name}_phy"
-
-        print("Exporting to phy format...")
+        print("Converting data...")
 
         spike_depths = []
         clusters = []
@@ -198,18 +196,20 @@ def extract_spikes(  # noqa: C901
         cluster_peak_to_trough = []
         cluster_waveforms = []
 
-        templates = []
         quality_metrics = []
 
         for index, analyzer in enumerate(analyzer_mappings):
-            export_to_phy(
-                analyzer,
-                output_folder=phy_folder,
-                compute_pc_features=False,
-                remove_if_exists=True,
-                copy_binary=False,
-                dtype="int16",
-            )
+            sampling_frequency = analyzer.sampling_frequency
+
+            spike_vector = analyzer.sorting.to_spike_vector()
+            current_spike_times = spike_vector["sample_index"]
+            # Already a 0-based index into analyzer.unit_ids, in the same
+            # order used below -- no separate cluster-id remapping needed.
+            current_clusters = spike_vector["unit_index"]
+
+            spike_amplitudes = analyzer.get_extension(
+                "spike_amplitudes"
+            ).get_data()
 
             spike_locations = analyzer.get_extension(
                 "spike_locations"
@@ -225,26 +225,22 @@ def extract_spikes(  # noqa: C901
                 peak_waveform = waveform[:, peak_channel]
                 peak_to_trough = (
                     np.argmax(peak_waveform) - np.argmin(peak_waveform)
-                ) / 30000.0
+                ) / sampling_frequency
                 cluster_channels.append(peak_channel)
                 unit_shank_indices.append(index)
                 cluster_peak_to_trough.append(peak_to_trough)
                 cluster_waveforms.append(waveform)
 
-            print("Converting data...")
-
-            current_clusters = np.load(phy_folder / "spike_clusters.npy")
-            clusters.append(current_clusters)
+            clusters.append(current_clusters.astype("uint32"))
 
             for cluster in current_clusters:
                 shank_indices.append(index)
 
-            spike_samples.append(np.load(phy_folder / "spike_times.npy"))
-            amps.append(np.load(phy_folder / "amplitudes.npy"))
+            spike_samples.append(current_spike_times / sampling_frequency)
+            amps.append(spike_amplitudes)
             spike_depths.append(spike_locations["y"])
 
-            qm = analyzer.get_extension("quality_metrics")
-            qm_data = qm.get_data()
+            qm_data = analyzer.get_extension("quality_metrics").get_data()
 
             qm_data.index.name = "cluster_id"
             qm_data["cluster_id.1"] = qm_data.index.values
@@ -269,19 +265,15 @@ def extract_spikes(  # noqa: C901
             quality_metrics.append(qm_data)
 
         if len(analyzer_mappings) == 1:
-            spike_clusters = np.squeeze(clusters[0].astype("uint32"))
-            spike_times = np.squeeze(spike_samples[0] / 30000.0).astype(
-                "float64"
-            )
+            spike_clusters = np.squeeze(clusters[0])
+            spike_times = np.squeeze(spike_samples[0]).astype("float64")
             spike_amps = np.squeeze(-amps[0]).astype("float64")
             spike_depths_array = spike_depths[0]
             quality_metrics_df = quality_metrics[0]
         else:
-            spike_clusters = np.squeeze(
-                np.concatenate(clusters).astype("uint32")
-            )
+            spike_clusters = np.squeeze(np.concatenate(clusters))
             spike_times = np.squeeze(
-                np.concatenate(spike_samples) / 30000.0
+                np.concatenate(spike_samples)
             ).astype("float64")
             spike_amps = np.squeeze(-np.concatenate(amps)).astype("float64")
             spike_depths_array = np.concatenate(spike_depths)
