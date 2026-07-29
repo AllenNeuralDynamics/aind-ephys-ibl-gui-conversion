@@ -82,6 +82,7 @@ def extract_spikes(  # noqa: C901
     results_folder: Path,
     stream_to_use: str | None = None,
     min_duration_secs: int = 300,
+    session_folder: Path | None = None,
 ):
     """Extract spike data from a sorting folder.
 
@@ -97,8 +98,16 @@ def extract_spikes(  # noqa: C901
         ``"ProbeA"``); the token also selects the paired LFP stream.
     min_duration_secs : int
         Minimum duration (seconds) for spike extraction.
+    session_folder : Path or None
+        Raw session folder holding ``ecephys_clipped``/``ecephys_compressed``,
+        used to enumerate the recording's streams. When ``None`` it is derived
+        from ``sorting_folder`` by stripping the ``_sorted`` suffix (the legacy
+        sibling-of-sorted layout). Pass it explicitly when raw and sorted are
+        not siblings -- e.g. mounted under fixed pipeline slots -- so the raw
+        session is located by name/content instead of a path assumption.
     """
-    session_folder = Path(str(sorting_folder).split("_sorted")[0])
+    if session_folder is None:
+        session_folder = Path(str(sorting_folder).split("_sorted")[0])
 
     ecephys_folder = session_folder / "ecephys_clipped"
     if ecephys_folder.is_dir():
@@ -275,9 +284,9 @@ def extract_spikes(  # noqa: C901
             quality_metrics_df = quality_metrics[0]
         else:
             spike_clusters = np.squeeze(np.concatenate(clusters))
-            spike_times = np.squeeze(
-                np.concatenate(spike_samples)
-            ).astype("float64")
+            spike_times = np.squeeze(np.concatenate(spike_samples)).astype(
+                "float64"
+            )
             spike_amps = np.squeeze(-np.concatenate(amps)).astype("float64")
             spike_depths_array = np.concatenate(spike_depths)
             quality_metrics_df = pd.concat(quality_metrics)
