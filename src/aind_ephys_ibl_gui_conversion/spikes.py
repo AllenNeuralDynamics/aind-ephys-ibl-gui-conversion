@@ -121,7 +121,9 @@ def extract_spikes(  # noqa: C901
                     continue
 
                 analyzer_mappings.append(analyzer)
-                curated_sorting_objs.append(si.load_sorting(curated_folder / analyzer_folder.name))
+                curated_sorting_objs.append(
+                    si.load_sorting(curated_folder / analyzer_folder.name)
+                )
         else:
             analyzer_folder = (
                 postprocessed_folder
@@ -146,7 +148,9 @@ def extract_spikes(  # noqa: C901
                     analyzer_folder
                 )
             analyzer_mappings.append(analyzer)
-            curated_sorting_objs.append(si.load(curated_folder / analyzer_folder.name))
+            curated_sorting_objs.append(
+                si.load(curated_folder / analyzer_folder.name)
+            )
 
         phy_folder = scratch_folder / f"{postprocessed_folder.parent.name}_phy"
 
@@ -209,9 +213,11 @@ def extract_spikes(  # noqa: C901
 
             qm = analyzer.get_extension("quality_metrics")
             qm_data = qm.get_data()
-            
+
             curated = curated_sorting_objs[index]
-            assert np.array_equal(curated.unit_ids, analyzer.unit_ids), "Curated and analyzer unit IDs do not match."
+            assert np.array_equal(curated.unit_ids, analyzer.unit_ids), (
+                "Curated and analyzer unit IDs do not match."
+            )
 
             qm_data.index.name = "cluster_id"
             qm_data["cluster_id.1"] = qm_data.index.values
@@ -219,10 +225,9 @@ def extract_spikes(  # noqa: C901
                 "default_qc" in analyzer.sorting.get_property_keys()
                 or "default_qc" in curated.get_property_keys()
             ):
-                qm_data["default_qc"] = (
-                    analyzer.sorting.get_property("default_qc")
-                    or curated.get_property("default_qc")
-                )
+                qm_data["default_qc"] = analyzer.sorting.get_property(
+                    "default_qc"
+                ) or curated.get_property("default_qc")
             if (
                 "decoder_label" in analyzer.sorting.get_property_keys()
                 or "decoder_label" in curated.get_property_keys()
@@ -230,7 +235,7 @@ def extract_spikes(  # noqa: C901
             ):
                 qm_data["unitrefine_label"] = (
                     analyzer.sorting.get_property("decoder_label")
-                    or analyzer.sorting.get_property("unitrefine_label") 
+                    or analyzer.sorting.get_property("unitrefine_label")
                     or curated.get_property("decoder_label")
                 )
 
