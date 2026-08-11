@@ -71,6 +71,46 @@ __all__ = [
 ]
 
 
+def _results_in_block_order(
+    stream: ProbeStream,
+    all_results: list[tuple[ProbeStream, BlockMetrics]],
+) -> list[BlockMetrics]:
+    """Return *stream*'s results in ``stream.blocks`` order.
+
+    Ordering by ``block_index`` is wrong once a surface-finding recording is
+    merged in: that index is per-recording, so the surface blocks restart at
+    0 and collide with the main recording's.
+
+    The collision matters because the canonical channel table is built by
+    *first-seen* order in ``build_channel_table``, and it is built twice from
+    two different lists -- ``_save_channel_metadata`` walks ``stream.blocks``
+    while ``_build_channel_maps`` walks these results. Sorting by a colliding
+    index reorders one and not the other, so the saved ``channels.*.npy``
+    rows stop matching the correlation/coherency rows that
+    ``row_channels.json`` indexes, with nothing raised. Keying off
+    ``stream.blocks`` makes the two constructions identical by definition.
+
+    Only reachable with >=2 main blocks *and* a surface block, which is why
+    equal-count sessions never showed it.
+
+    Parameters
+    ----------
+    stream : ProbeStream
+        The stream whose results to collect.
+    all_results : list[tuple[ProbeStream, BlockMetrics]]
+        Every ``(stream, result)`` pair, in arbitrary completion order.
+
+    Returns
+    -------
+    list[BlockMetrics]
+        One result per block, aligned to ``stream.blocks``.
+    """
+    # id() keys because ExperimentBlock is an unhashable dataclass; these are
+    # the same objects that were submitted for processing.
+    by_block = {id(r.block): r for s, r in all_results if s is stream}
+    return [by_block[id(block)] for block in stream.blocks]
+
+
 def extract_continuous(
     sorting_folder: Path,
     results_folder: Path,
@@ -166,12 +206,30 @@ def extract_continuous(
         (
             neuropix_streams_surface,
             ecephys_compressed_folder_surface,
-            _,
+            num_blocks_surface,
         ) = get_ecephys_stream_names(probe_surface_finding)
+
+        # Use the surface recording's OWN block count. It is an independent,
+        # usually shorter acquisition, so it has no reason to have the same
+        # number of experiments as the main recording. Passing the main
+        # count made load_probe_streams ask for
+        # experiment<N>_<stream>.zarr files that do not exist, and only the
+        # LFP branch guards a missing zarr -- an absent AP/wideband block
+        # raises. 754372's 2025-01-15 session is the live case: main has
+        # experiment1+2, surface has experiment1 only, and exactly the
+        # experiment2 units failed. A surface recording that happens to
+        # match the main block count passed silently, so this was latent
+        # across the cohort.
+        if num_blocks_surface != num_blocks:
+            logging.info(
+                f"[FFT] Surface-finding recording has "
+                f"{num_blocks_surface} block(s) vs {num_blocks} in the "
+                "main recording; using its own count"
+            )
 
         surface_streams = load_probe_streams(
             neuropix_streams_surface,
-            num_blocks,
+            num_blocks_surface,
             ecephys_compressed_folder_surface,
             results_folder,
             stream_to_use=stream_to_use,
@@ -248,10 +306,7 @@ def extract_continuous(
 
     # --- Assemble per stream ---
     for stream in streams:
-        results = sorted(
-            [r for s, r in all_results if s is stream],
-            key=lambda r: r.block.block_index,
-        )
+        results = _results_in_block_order(stream, all_results)
 
         _assemble_and_save_stream(
             stream,

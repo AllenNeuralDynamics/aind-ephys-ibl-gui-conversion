@@ -2,16 +2,24 @@
 
 import unittest
 from collections import defaultdict
+from pathlib import Path
 
 import spikeinterface as si
 from spikeinterface.extractors import toy_example
 
+from aind_ephys_ibl_gui_conversion.ephys import _results_in_block_order
 from aind_ephys_ibl_gui_conversion.recording_utils import (
     _merge_separate_asset_recording_dicts,
     _stream_matches,
     _stream_to_probe_name,
     get_largest_segment_recordings,
     get_main_recording_from_list,
+    merge_probe_streams,
+)
+from aind_ephys_ibl_gui_conversion.types import (
+    BlockMetrics,
+    ExperimentBlock,
+    ProbeStream,
 )
 
 
@@ -202,3 +210,96 @@ class TestRecordingUtils(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _block_metrics(block):
+    """Build a BlockMetrics carrying only the block identity."""
+    return BlockMetrics(
+        block=block,
+        rms_ap=None,
+        rms_lfp=None,
+        timestamps=None,
+        correlation=None,
+        coherency=None,
+        psd_power=None,
+        psd_freqs=None,
+        shank_channels=None,
+    )
+
+
+class TestSurfaceFindingBlockCounts(unittest.TestCase):
+    """A surface recording has its own experiment count (TODO 15).
+
+    754372's 2025-01-15 session records main as experiment1+experiment2 and
+    surface as experiment1 only. The loader used to be handed the *main*
+    count for both, so it asked the surface asset for an experiment2 zarr
+    that does not exist and 5 of 12 units failed. A surface recording that
+    happens to match the main count passed silently, so this was latent
+    across the cohort rather than specific to one mouse.
+    """
+
+    @staticmethod
+    def _stream(name, block_indices):
+        """Build a ProbeStream with placeholder blocks at given indices."""
+        return ProbeStream(
+            stream_name=name,
+            probe_name=name,
+            blocks=[
+                ExperimentBlock(
+                    recording=None, lfp_recording=None, block_index=i
+                )
+                for i in block_indices
+            ],
+            output_folder=Path("/tmp/unused"),
+        )
+
+    def test_merge_accepts_unequal_block_counts(self):
+        """Main with 2 experiments merges with surface having only 1."""
+        main = self._stream("probeA", [0, 1])
+        surface = self._stream("probeA", [0])
+
+        merged = merge_probe_streams([main], [surface])
+
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(len(merged[0].blocks), 3)
+        # the surface block's index collides with the first main block's
+        self.assertEqual([b.block_index for b in merged[0].blocks], [0, 1, 0])
+
+    def test_results_follow_block_order_not_block_index(self):
+        """Colliding indices must not reorder results vs stream.blocks.
+
+        The canonical channel table is built by first-seen order from both
+        stream.blocks and these results; if the two disagree the saved
+        channel rows stop matching the coherence matrix rows silently.
+        """
+        stream = self._stream("probeA", [0, 1, 0])
+        main0, main1, surface0 = stream.blocks
+
+        def _result(block):
+            return _block_metrics(block)
+
+        # as_completed returns in arbitrary order; sorting by block_index
+        # would give [main0, surface0, main1].
+        scrambled = [
+            (stream, _result(surface0)),
+            (stream, _result(main1)),
+            (stream, _result(main0)),
+        ]
+
+        ordered = _results_in_block_order(stream, scrambled)
+
+        self.assertEqual([r.block for r in ordered], [main0, main1, surface0])
+
+    def test_results_ignore_other_streams(self):
+        """Only the requested stream's results are collected."""
+        a = self._stream("probeA", [0])
+        b = self._stream("probeB", [0])
+
+        def _result(block):
+            return _block_metrics(block)
+
+        pairs = [(b, _result(b.blocks[0])), (a, _result(a.blocks[0]))]
+
+        ordered = _results_in_block_order(a, pairs)
+
+        self.assertEqual([r.block for r in ordered], [a.blocks[0]])

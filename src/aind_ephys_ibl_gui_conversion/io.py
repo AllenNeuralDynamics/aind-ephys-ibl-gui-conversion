@@ -411,7 +411,12 @@ def _assemble_and_save_stream(
     stream : ProbeStream
         Probe stream with output folder and block info.
     results : list[BlockMetrics]
-        Per-block metric results, sorted by block index.
+        Per-block metric results, in ``stream.blocks`` order. That order is
+        load-bearing: the canonical channel table is built by first-seen
+        order, once from ``stream.blocks`` here and once from *results* in
+        ``_build_channel_maps``, so the two must agree for the saved
+        ``channels.*.npy`` rows to match the matrices ``row_channels.json``
+        indexes.
     rms_window_interval : float
         Window interval parameter (saved to method metadata).
     rms_window_duration : float
