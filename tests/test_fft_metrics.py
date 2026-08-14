@@ -466,8 +466,8 @@ class TestProcessStreamFft:
             assert row_channels["shanks"]["0"]["rows"] == [0, 1, 2, 3]
             assert row_channels["shanks"]["1"]["rows"] == [4, 5, 6, 7]
 
-    def test_channel_table_uses_contact_ids_for_cross_block_stitching(self):
-        """Stable contact IDs stitch blocks before rounded coordinates."""
+    def test_channel_table_deduplicates_same_location_across_blocks(self):
+        """Same electrode location in two blocks maps to one table row."""
         groups = np.array([0, 0])
         rec1 = _FakeRecording(
             locations=np.array([[0.0, 0.0], [0.0, 20.0]]),
@@ -475,7 +475,7 @@ class TestProcessStreamFft:
             contact_ids=np.array(["s0e0", "s0e1"]),
         )
         rec2 = _FakeRecording(
-            locations=np.array([[0.0, 0.1], [0.0, 20.1]]),
+            locations=np.array([[0.0, 0.0], [0.0, 20.0]]),
             groups=groups,
             contact_ids=np.array(["s0e0", "s0e1"]),
         )
@@ -507,36 +507,26 @@ class TestProcessStreamFft:
         np.testing.assert_array_equal(table.contact_id, np.array(["e1", "e0"]))
         np.testing.assert_array_equal(block_maps[0], np.array([0, 1]))
 
-    def test_channel_table_falls_back_to_geometry_for_invalid_contact_ids(
+    def test_channel_table_geometry_key_rounds_submicrometer_differences(
         self,
     ):
-        """Partial contact ID vectors are not used as stable stitch keys."""
+        """Sub-micrometre differences round to the same integer key."""
         groups = np.array([0, 0])
-        probe = _FakeProbe(
-            contact_ids=np.array(["e0", None], dtype=object),
-            device_channel_indices=np.array([0, 1]),
-        )
         rec1 = _FakeRecording(
             locations=np.array([[0.0, 0.0], [0.0, 20.0]]),
             groups=groups,
-            channel_ids=np.array(["0", "1"]),
-            probe=probe,
         )
         rec2 = _FakeRecording(
             locations=np.array([[0.0, 0.1], [0.0, 20.1]]),
             groups=groups,
-            channel_ids=np.array(["0", "1"]),
-            probe=probe,
         )
 
         table, block_maps = build_channel_table([rec1, rec2])
 
-        assert table.local_coordinates.shape[0] == 4
-        np.testing.assert_array_equal(
-            table.contact_id, np.array(["", "", "", ""])
-        )
+        # 0.1 µm difference rounds to the same integer µm -> deduplicates.
+        assert table.local_coordinates.shape[0] == 2
         np.testing.assert_array_equal(block_maps[0], np.array([0, 1]))
-        np.testing.assert_array_equal(block_maps[1], np.array([2, 3]))
+        np.testing.assert_array_equal(block_maps[1], np.array([0, 1]))
 
     def test_normalized_channel_groups_prefers_contact_id_shank(self):
         """Flat group + shank-prefixed contact ids -> physical shank wins.
@@ -556,38 +546,68 @@ class TestProcessStreamFft:
             normalized_channel_groups(rec), np.array([0, 0, 1, 1])
         )
 
-    def test_channel_table_surface_finding_flat_group_uses_contact_shank(self):
-        """Surface block with flat group must not collapse shanks.
+    def test_channel_table_surface_finding_flat_group_deduplicates(self):
+        """Multi-shank surface block with flat group deduplicates via geometry.
 
-        Reproduces the 4-shank surface-finding defect where the surface block's
-        flat ``group`` (a) labeled every shank's channels as shank 0 and (b)
-        failed to dedup the same physical contact against the main block,
-        leaving shanks 2-4 with only a redundant bottom-bank slice.
+        The surface block's flat ``group`` (all 0) is irrelevant to
+        deduplication: global channel locations are unique per shank so the
+        integer-micrometre key correctly matches each electrode. shank_ind
+        comes from the first (main) recording, which has correct per-shank
+        groups resolved from contact id prefixes.
         """
         contact_ids = np.array(["s0e0", "s0e1", "s1e0", "s1e1"])
         locations = np.array(
             [[0.0, 0.0], [0.0, 20.0], [250.0, 0.0], [250.0, 20.0]]
-        )
-        surface = _FakeRecording(  # flat group across all shanks
-            locations=locations,
-            groups=np.array([0, 0, 0, 0]),
-            contact_ids=contact_ids,
         )
         main = _FakeRecording(  # correct per-shank groups
             locations=locations,
             groups=np.array([0, 0, 1, 1]),
             contact_ids=contact_ids,
         )
+        surface = _FakeRecording(  # flat group across all shanks
+            locations=locations,
+            groups=np.array([0, 0, 0, 0]),
+            contact_ids=contact_ids,
+        )
 
-        table, block_maps = build_channel_table([surface, main])
+        table, block_maps = build_channel_table([main, surface])
 
-        # Same physical contacts across blocks dedup to 4 rows (not 6).
+        # Same physical contacts across blocks dedup to 4 rows (not 8).
         assert table.local_coordinates.shape[0] == 4
         np.testing.assert_array_equal(table.contact_id, contact_ids)
-        # shank_ind follows the contact-id physical shank, not the flat group.
+        # shank_ind comes from main (first), which uses contact-id shank.
         np.testing.assert_array_equal(table.shank_ind, np.array([0, 0, 1, 1]))
         np.testing.assert_array_equal(block_maps[0], np.array([0, 1, 2, 3]))
         np.testing.assert_array_equal(block_maps[1], np.array([0, 1, 2, 3]))
+
+    def test_channel_table_deduplicates_when_one_block_has_no_contact_ids(
+        self,
+    ):
+        """Absent contact ids in one block do not prevent deduplication.
+
+        Reproduces the NP2.0 single-shank defect: the main recording zarr had
+        contact ids but the surface zarr did not, so the old contact-id key
+        path doubled the channel table to 768 rows. The geometry key is now
+        primary so contact id availability is irrelevant to deduplication.
+        """
+        locations = np.array([[0.0, 0.0], [0.0, 20.0]])
+        groups = np.array([0, 0])
+        main = _FakeRecording(
+            locations=locations,
+            groups=groups,
+            contact_ids=np.array(["e0", "e1"]),
+        )
+        surface = _FakeRecording(
+            locations=locations,
+            groups=groups,
+            contact_ids=None,
+        )
+
+        table, block_maps = build_channel_table([main, surface])
+
+        assert table.local_coordinates.shape[0] == 2
+        np.testing.assert_array_equal(block_maps[0], np.array([0, 1]))
+        np.testing.assert_array_equal(block_maps[1], np.array([0, 1]))
 
     def test_main_tag_no_coherence(self):
         """Test tagged output without coherence."""

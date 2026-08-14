@@ -49,8 +49,7 @@ def normalized_channel_groups(recording: si.BaseRecording) -> np.ndarray:
     across recording blocks. In particular, surface-finding blocks frequently
     report a *flat* ``group`` property (all channels group 0) even though they
     span every shank; deriving the shank from ``group`` there collapses all
-    shanks to 0 and, on merge, both mislabels shanks and fails to deduplicate
-    the same physical contact recorded in multiple blocks.
+    shanks to 0.
 
     Falls back to the SpikeInterface ``group`` property (normalized to 0-based
     contiguous) when contact ids are unavailable/unprefixed, and finally to a
@@ -87,15 +86,24 @@ def build_channel_table(
 ) -> tuple[ChannelTable, list[np.ndarray]]:
     """Build a canonical channel table and per-block row maps.
 
-    Channels are deduplicated by normalized shank plus contact id when
-    available, falling back to local coordinate. ``raw_ind`` intentionally
-    remains the legacy positional ``0..N-1`` placeholder in this phase; the
-    table row position is the join key.
+    Channels are deduplicated by their integer-quantised global location
+    (nearest micrometre in each dimension). Contact ids and shank index are
+    stored as annotations but play no part in the deduplication key.
+
+    Using integer-micrometre geometry as the sole key avoids cross-block
+    inconsistency that arises when one zarr embeds probe contact ids and
+    another does not: mixed ``("contact", …)`` and ``("loc", …)`` keys for
+    the same physical electrode would silently double the channel table.
+    Probe coordinates from probeinterface are looked up from the manufacturer
+    database for a given model, so they are identical across recording blocks
+    of the same probe to well within 1 µm. ``raw_ind`` intentionally remains
+    the legacy positional ``0..N-1`` placeholder; the table row position is
+    the join key.
     """
     if not recordings:
         raise ValueError("At least one recording is required.")
 
-    row_by_key: dict[tuple[object, ...], int] = {}
+    row_by_key: dict[tuple[int, ...], int] = {}
     contact_ids: list[str] = []
     local_coordinates: list[np.ndarray] = []
     shank_ind: list[int] = []
@@ -119,7 +127,7 @@ def build_channel_table(
         for channel_index, (location, group, contact_id) in enumerate(
             zip(locations[:, :2], groups, ids, strict=True)
         ):
-            key = _channel_key(location, int(group), contact_id)
+            key = _channel_key(location)
             row = row_by_key.get(key)
             if row is None:
                 row = len(local_coordinates)
@@ -158,7 +166,7 @@ def normalized_contact_ids(recording: si.BaseRecording) -> np.ndarray:
     Contact ids identify physical electrode sites. They may be exposed as a
     per-channel property, or only on the attached probe. If they are
     unavailable, malformed, or cannot be confidently projected into recording
-    channel order, return ``None`` sentinels so callers fall back to geometry.
+    channel order, return ``None`` sentinels.
     """
     prop_ids = _contact_ids_property(recording)
     if prop_ids is not None:
@@ -199,7 +207,7 @@ def _valid_contact_ids(ids: np.ndarray, n_channels: int) -> np.ndarray | None:
     """Validate a 1-D contact-id vector; return string ids or ``None``.
 
     Rejects wrong-length, missing, NaN/empty, or non-unique ids so callers
-    only stitch blocks on trustworthy per-channel identifiers.
+    only store trustworthy per-channel identifiers.
     """
     if ids is None or ids.ndim != 1 or ids.shape[0] != n_channels:
         return None
@@ -264,13 +272,6 @@ def _project_contact_ids_by_device_channel(
     return _valid_contact_ids(np.asarray(projected, dtype=object), n_channels)
 
 
-def _channel_key(
-    location: np.ndarray,
-    shank_index: int,
-    contact_id: str | None,
-) -> tuple[object, ...]:
-    """Stable key for matching the same channel across blocks."""
-    if contact_id:
-        return ("contact", shank_index, contact_id)
-    rounded = np.round(np.asarray(location, dtype=float), decimals=6)
-    return ("loc", shank_index, *rounded.tolist())
+def _channel_key(location: np.ndarray) -> tuple[int, ...]:
+    """Integer-micrometre key for matching the same electrode across blocks."""
+    return tuple(int(round(v)) for v in location[:2])
