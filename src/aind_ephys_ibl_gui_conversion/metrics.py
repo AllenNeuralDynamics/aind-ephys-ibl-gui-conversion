@@ -232,7 +232,11 @@ def _compute_all_metrics(  # noqa: C901
         ch_mask = channel_groups == group_val
         ch_indices = np.where(ch_mask)[0]
         locs = channel_locations[ch_indices]
-        depth_order = np.argsort(locs[:, 1])
+        # Depth first, then lateral position. Probes with several contacts at
+        # one depth (e.g. NP2.0 two-column banks) would otherwise be ordered by
+        # whatever the recording channel order happens to be, so the column a
+        # given matrix row belongs to could flip from depth to depth.
+        depth_order = np.lexsort((locs[:, 0], locs[:, 1]))
         shank_info[group_val] = {
             "indices": ch_indices,
             "depth_order": depth_order,

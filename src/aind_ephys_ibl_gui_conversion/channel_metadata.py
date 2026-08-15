@@ -153,10 +153,17 @@ def depth_sorted_shank_rows(
     table: ChannelTable,
     shank_index: int,
 ) -> np.ndarray:
-    """Return channel-table rows for a shank in matrix display order."""
+    """Return channel-table rows for a shank in matrix display order.
+
+    Ordered by depth, then by lateral position. The secondary key matters for
+    probes with several contacts at one depth: without it the within-depth
+    order follows the channel table's first-seen order, so consecutive matrix
+    rows would not correspond to a consistent column. Must stay in step with
+    the ordering used in ``metrics._compute_all_metrics``.
+    """
     rows = np.where(table.shank_ind == shank_index)[0].astype(np.int64)
-    depths = table.local_coordinates[rows, 1]
-    order = np.argsort(depths, kind="stable")
+    coords = table.local_coordinates[rows]
+    order = np.lexsort((coords[:, 0], coords[:, 1]))
     return rows[order]
 
 
