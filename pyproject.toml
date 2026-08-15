@@ -37,7 +37,15 @@ Changelog = "https://github.com/AllenNeuralDynamics/aind-ephys-ibl-gui-conversio
 
 [dependency-groups]
 types = ["mypy"]
-dev = [{ include-group = "types" }, "codespell", "pytest", "pytest-cov", "ruff", "interrogate"]
+dev = [
+    { include-group = "types" },
+    "codespell",
+    "pytest",
+    "pytest-cov",
+    "ruff",
+    "interrogate",
+    "s3fs>=2026.7.0",
+]
 jupyter = [{ include-group = "dev" }, "ipykernel", "pip"]
 
 [tool.hatch.build.targets.wheel]
