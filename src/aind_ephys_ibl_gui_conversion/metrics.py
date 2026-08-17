@@ -445,6 +445,9 @@ def _build_row_channels_metadata(
                     "rows": rows,
                     "n_channels": len(rows),
                     "duration_s": float(rec.get_duration()),
+                    # Aggregation weight for this block. Every per-row and
+                    # per-pair weight is derivable from these plus ``rows``.
+                    "n_windows": int(result.rms_ap.shape[0]),
                 }
             )
         shanks[str(shank_ind)] = {
@@ -453,7 +456,7 @@ def _build_row_channels_metadata(
             "blocks": block_entries,
         }
     return {
-        "version": 2,
+        "version": 3,
         "matrix_rows": np.arange(
             len(channel_table.raw_ind), dtype=int
         ).tolist(),

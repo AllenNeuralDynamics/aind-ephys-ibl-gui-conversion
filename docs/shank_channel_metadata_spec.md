@@ -123,7 +123,7 @@ changing the contract.
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "matrix_rows": [0, 1, 2],
   "matrix_row_order": "channel_table",
   "shanks": {
@@ -131,8 +131,8 @@ changing the contract.
       "rows": [<channel-table positions in display order>],
       "legacy_file_index": 1,
       "blocks": [
-        {"label": "main", "rows": [...]},
-        {"label": "surface", "rows": [...]}
+        {"label": "main", "rows": [...], "n_windows": 240},
+        {"label": "surface", "rows": [...], "n_windows": 20}
       ]
     }
   }
@@ -148,6 +148,32 @@ changing the contract.
 - Producer construction convention: `rows` for shank k = channel-table
   positions with `shankInd == k`, sorted by depth ascending. Persist
   explicitly regardless of the convention.
+
+### 5.2.1 Metric support
+
+**Every per-channel array is dense in channel-table row order**, including the
+single-block `*.rms.npy` and the `*Main` variants of multi-block streams. Row
+position is the only join key; the arrays never use block-local column order.
+
+A single block covers a subset of the probe's contacts, so rows that block did
+not record are **`NaN`**. `0 uV` is a valid RMS reading for a dead channel, so
+"not recorded" has to stay distinguishable from "recorded as zero". Consumers
+must treat `NaN` as unsupported rather than as data — and need no fallback for
+short arrays, because the arrays are never short.
+
+Because rows are addressed canonically, **block order carries no meaning**. The
+channel table assigns rows in first-seen order, so a different block order
+yields a different row assignment, but each stream's `channels.*.npy` and its
+RMS arrays always come from the same assignment and stay mutually consistent.
+
+Aggregated outputs (the untagged multi-block RMS summary, and PSD) always have
+full support: the channel table is a union over blocks, so every row is
+observed in at least one block.
+
+`n_windows` in each `blocks[]` entry is the per-block window count used to
+weight all averaging, added in `version: 3`. Every per-row aggregation weight
+is derivable from it: a row's weight is the sum of `n_windows` over the blocks
+whose `rows` contain that row.
 
 ### 5.3 Versioning
 

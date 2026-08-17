@@ -185,11 +185,20 @@ def _save_rms(
     output_folder: Path,
     result: BlockMetrics,
     tag: str,
+    row_map: np.ndarray,
+    n_rows: int,
 ) -> None:
-    """Save RMS time series for a single block."""
+    """Save one block's RMS time series on canonical channel-table rows.
+
+    ``row_map`` sends each block channel to its channel-table row. Rows this
+    block did not record are ``NaN``: a block covers a subset of the probe's
+    contacts, and 0 uV is a valid RMS reading for a dead channel, so the two
+    have to stay distinguishable. Saving on canonical rows means consumers
+    join by row position and block order carries no meaning.
+    """
     np.save(
         output_folder / f"_iblqc_ephysTimeRmsAP{tag}.rms.npy",
-        result.rms_ap,
+        _on_channel_table_rows(result.rms_ap, row_map, n_rows),
     )
     np.save(
         output_folder / f"_iblqc_ephysTimeRmsAP{tag}.timestamps.npy",
@@ -197,12 +206,23 @@ def _save_rms(
     )
     np.save(
         output_folder / f"_iblqc_ephysTimeRmsLF{tag}.rms.npy",
-        result.rms_lfp,
+        _on_channel_table_rows(result.rms_lfp, row_map, n_rows),
     )
     np.save(
         output_folder / f"_iblqc_ephysTimeRmsLF{tag}.timestamps.npy",
         result.timestamps,
     )
+
+
+def _on_channel_table_rows(
+    values: np.ndarray,
+    row_map: np.ndarray,
+    n_rows: int,
+) -> np.ndarray:
+    """Scatter block-local columns onto canonical rows, NaN elsewhere."""
+    dense = np.full((values.shape[0], n_rows), np.nan, dtype=np.float32)
+    dense[:, row_map[: values.shape[1]]] = values
+    return dense
 
 
 def _save_combined_rms_summary(
@@ -431,6 +451,15 @@ def _assemble_and_save_stream(
         key=lambda r: r.block.duration,
     )
 
+    # Canonical row map for the main block, so its RMS columns are saved on
+    # channel-table rows rather than block-local ones.
+    _, block_maps, n_rows = _build_channel_maps(results)
+    main_row_map = next(
+        row_map
+        for row_map, r in zip(block_maps, results, strict=True)
+        if r is main_result
+    )
+
     if stream.has_surface:
         # Combined: probe summary RMS + coherence + channel metadata
         _save_combined_rms_summary(output_folder, results)
@@ -441,10 +470,22 @@ def _assemble_and_save_stream(
         )
 
         # Main: full RMS time series (only main block channels)
-        _save_rms(output_folder, main_result, tag="Main")
+        _save_rms(
+            output_folder,
+            main_result,
+            tag="Main",
+            row_map=main_row_map,
+            n_rows=n_rows,
+        )
     else:
         # No surface: single block, save everything
-        _save_rms(output_folder, main_result, tag="")
+        _save_rms(
+            output_folder,
+            main_result,
+            tag="",
+            row_map=main_row_map,
+            n_rows=n_rows,
+        )
         _save_spectral_outputs(output_folder, [main_result])
         _save_channel_metadata(output_folder, [main_result.block.recording])
 

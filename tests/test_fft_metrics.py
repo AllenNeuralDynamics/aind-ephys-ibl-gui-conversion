@@ -9,20 +9,28 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from aind_ephys_ibl_gui_conversion.channel_metadata import (
     build_channel_table,
     normalized_channel_groups,
 )
 from aind_ephys_ibl_gui_conversion.io import (
+    _assemble_and_save_stream,
     process_stream_fft,
 )
 from aind_ephys_ibl_gui_conversion.metrics import (
     COHERENCE_BANDS,
+    _assemble_blockwise_coherence,
     _compute_all_metrics,
     _parseval_rms,
 )
-from aind_ephys_ibl_gui_conversion.types import ExperimentBlock
+from aind_ephys_ibl_gui_conversion.types import (
+    BlockMetrics,
+    ExperimentBlock,
+    ProbeStream,
+    ShankChannels,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -86,15 +94,28 @@ class _FakeRecording:
         contact_ids: np.ndarray | None = None,
         channel_ids: np.ndarray | None = None,
         probe=None,
+        duration_s: float = 60.0,
+        sampling_frequency: float = 2500.0,
     ) -> None:
         self._locations = locations
         self._groups = groups
         self._contact_ids = contact_ids
         self._channel_ids = channel_ids
         self._probe = probe
+        self._duration_s = duration_s
+        self._fs = sampling_frequency
 
     def get_num_channels(self):
         return self._locations.shape[0]
+
+    def get_duration(self):
+        return self._duration_s
+
+    def get_sampling_frequency(self):
+        return self._fs
+
+    def get_num_samples(self):
+        return int(round(self._duration_s * self._fs))
 
     def get_channel_locations(self):
         return self._locations
@@ -411,7 +432,7 @@ class TestProcessStreamFft:
             assert row_channels_path.exists()
             with open(row_channels_path) as f:
                 row_channels = json.load(f)
-            assert row_channels["version"] == 2
+            assert row_channels["version"] == 3
             assert row_channels["matrix_row_order"] == "channel_table"
             assert row_channels["matrix_rows"] == list(range(32))
             assert row_channels["shanks"]["0"]["rows"] == list(range(32))
@@ -670,3 +691,133 @@ class TestProcessStreamFft:
         # Coherency is complex
         for coh in result.coherency.values():
             assert np.iscomplexobj(coh)
+
+
+# ---------------------------------------------------------------------------
+# Metric support (cross-block pairs, aggregation weights, block ordering)
+# ---------------------------------------------------------------------------
+
+
+def _support_block(
+    *,
+    locations: np.ndarray,
+    contact_ids: np.ndarray,
+    n_windows: int,
+    duration_s: float,
+) -> BlockMetrics:
+    """One BlockMetrics with all-ones metrics over the given contacts."""
+    n_ch = locations.shape[0]
+    rec = _FakeRecording(
+        locations=locations,
+        groups=np.zeros(n_ch, dtype=int),
+        contact_ids=contact_ids,
+        duration_s=duration_s,
+    )
+    return BlockMetrics(
+        block=ExperimentBlock(
+            recording=rec, lfp_recording=None, block_index=0
+        ),
+        rms_ap=np.ones((n_windows, n_ch), dtype=np.float32),
+        rms_lfp=np.ones((n_windows, n_ch), dtype=np.float32),
+        timestamps=np.arange(n_windows, dtype=float),
+        correlation={"theta": np.ones((n_ch, n_ch), dtype=np.float32)},
+        coherency={"theta": np.ones((n_ch, n_ch), dtype=np.complex64)},
+        psd_power=np.ones((2, n_ch), dtype=np.float32),
+        psd_freqs=np.array([1.0, 2.0]),
+        shank_channels=[
+            ShankChannels(
+                shank_index=1,
+                channel_indices=np.arange(n_ch),
+                locations=locations,
+            )
+        ],
+    )
+
+
+def _disjoint_blocks() -> list[BlockMetrics]:
+    """Two blocks covering non-overlapping depths on one shank."""
+    return [
+        _support_block(
+            locations=np.array([[0.0, 0.0], [0.0, 20.0]]),
+            contact_ids=np.array(["s0e0", "s0e1"]),
+            n_windows=240,
+            duration_s=1200.0,
+        ),
+        _support_block(
+            locations=np.array([[0.0, 40.0], [0.0, 60.0]]),
+            contact_ids=np.array(["s0e2", "s0e3"]),
+            n_windows=20,
+            duration_s=100.0,
+        ),
+    ]
+
+
+class TestMetricSupport:
+    """Support semantics for outputs assembled across blocks."""
+
+    def test_aggregate_per_channel_support_is_never_missing(self):
+        """The channel table is a union, so every row has PSD support."""
+        out = _assemble_blockwise_coherence(_disjoint_blocks())
+
+        assert out["psd_power"].shape[1] == 4
+        assert np.all(np.isfinite(out["psd_power"]))
+
+    def test_row_channels_records_aggregation_weights(self):
+        """``n_windows`` makes every row and pair weight derivable."""
+        out = _assemble_blockwise_coherence(_disjoint_blocks())
+        row_channels = out["row_channels"]
+
+        assert row_channels["version"] == 3
+        blocks = row_channels["shanks"]["0"]["blocks"]
+        assert [b["n_windows"] for b in blocks] == [240, 20]
+
+        # A row's weight is the sum over blocks whose rows contain it.
+        weight_by_row = {}
+        for block in blocks:
+            for row in block["rows"]:
+                weight_by_row[row] = (
+                    weight_by_row.get(row, 0) + block["n_windows"]
+                )
+        assert weight_by_row == {0: 240, 1: 240, 2: 20, 3: 20}
+
+    @pytest.mark.parametrize("main_first", [True, False])
+    def test_main_rms_saved_on_its_own_channel_table_rows(self, main_first):
+        """Saved RMS joins to ``channels.*`` in any block order."""
+        blocks = _disjoint_blocks()
+        ordered = blocks if main_first else [blocks[1], blocks[0]]
+        main = max(ordered, key=lambda r: r.block.duration)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stream = ProbeStream(
+                stream_name="Probe A-AP",
+                probe_name="ProbeA",
+                blocks=[b.block for b in ordered],
+                output_folder=Path(tmpdir) / "ProbeA",
+            )
+            _assemble_and_save_stream(
+                stream,
+                ordered,
+                rms_window_interval=30.0,
+                rms_window_duration=4.0,
+            )
+
+            coords = np.load(
+                stream.output_folder / "channels.localCoordinates.npy"
+            )
+            rms = np.load(
+                stream.output_folder / "_iblqc_ephysTimeRmsAPMain.rms.npy"
+            )
+
+        # Dense over the whole channel table, not just the main block.
+        assert rms.shape == (240, 4)
+
+        main_locations = main.block.recording.get_channel_locations()
+        observed = np.array(
+            [
+                bool(np.any(np.all(np.isclose(main_locations, c), axis=1)))
+                for c in coords
+            ]
+        )
+        assert observed.sum() == main_locations.shape[0]
+        assert np.all(np.isfinite(rms[:, observed]))
+        assert np.all(np.isnan(rms[:, ~observed]))

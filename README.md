@@ -146,7 +146,7 @@ format.
 
 | File | Description |
 |------|-------------|
-| `_iblqc_ephysTimeRmsAP.rms.npy` (`*Main*` if multi-block) | AP-band RMS time series, shape (n_windows, n_channels) |
+| `_iblqc_ephysTimeRmsAP.rms.npy` (`*Main*` if multi-block) | AP-band RMS time series, shape (n_windows, n_channel_table_rows); rows the block did not record are `NaN` |
 | `_iblqc_ephysTimeRmsAP.timestamps.npy` | Window centers (s) |
 | `_iblqc_ephysTimeRmsLF*.rms.npy` | LFP-band RMS time series |
 | `_iblqc_ephysTimeRmsLF*.timestamps.npy` | Window centers (s) |
