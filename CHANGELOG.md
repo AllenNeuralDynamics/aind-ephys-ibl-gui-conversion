@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.4.0 (2026-08-18)
+
+### Feat
+
+- add optional session_folder to extract_spikes
+- add optional session_folder to extract_continuous
+- match stream_to_use against probe/collection token
+- **ephys**: add contact IDs to channel geometry
+- **ephys**: emit explicit geometry contract
+
+### Fix
+
+- **io**: save block RMS on canonical channel-table rows
+- **metrics**: order contacts by depth, then lateral position
+- **channel-metadata**: use integer-micrometre geometry as deduplication key
+- **ephys**: use the surface recording's own experiment count
+- try to make detection of analyzer folder more flexible
+- **channel-metadata**: derive shank from contact id, not flat group
+
+### Refactor
+
+- remove export to phy and use analyzer directly
+
 ## v0.3.3 (2026-07-22)
 
 ### Fix
