@@ -4,20 +4,33 @@ Tests for FFT-based ephys metric computation.
 Unit tests use synthetic data. Integration test uses a real zarr from S3.
 """
 
+import json
 import tempfile
 from pathlib import Path
 
 import numpy as np
+import pytest
 
+from aind_ephys_ibl_gui_conversion.channel_metadata import (
+    build_channel_table,
+    normalized_channel_groups,
+)
 from aind_ephys_ibl_gui_conversion.io import (
+    _assemble_and_save_stream,
     process_stream_fft,
 )
 from aind_ephys_ibl_gui_conversion.metrics import (
     COHERENCE_BANDS,
+    _assemble_blockwise_coherence,
     _compute_all_metrics,
     _parseval_rms,
 )
-from aind_ephys_ibl_gui_conversion.types import ExperimentBlock
+from aind_ephys_ibl_gui_conversion.types import (
+    BlockMetrics,
+    ExperimentBlock,
+    ProbeStream,
+    ShankChannels,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -29,6 +42,8 @@ def _make_synthetic_recording(
     fs: float = 30000.0,
     n_channels: int = 32,
     freqs_hz: list[float] | None = None,
+    groups: np.ndarray | None = None,
+    locations: np.ndarray | None = None,
 ):
     """Create a mock SI-like recording backed by a numpy array."""
     import spikeinterface as si
@@ -55,14 +70,82 @@ def _make_synthetic_recording(
     )
 
     # Set channel locations (depth along y-axis)
-    locations = np.zeros((n_channels, 2))
-    locations[:, 1] = np.arange(n_channels) * 20.0  # 20 um spacing
+    if locations is None:
+        locations = np.zeros((n_channels, 2))
+        locations[:, 1] = np.arange(n_channels) * 20.0  # 20 um spacing
     recording.set_property("location", locations)
 
-    # Set group (all one shank)
-    recording.set_property("group", np.zeros(n_channels, dtype=int))
+    # Set channel group / shank metadata.
+    if groups is None:
+        groups = np.zeros(n_channels, dtype=int)
+    recording.set_property("group", np.asarray(groups, dtype=int))
 
     return recording, traces
+
+
+class _FakeRecording:
+    """Minimal recording exposing geometry/contact_ids for metadata tests."""
+
+    def __init__(
+        self,
+        *,
+        locations: np.ndarray,
+        groups: np.ndarray,
+        contact_ids: np.ndarray | None = None,
+        channel_ids: np.ndarray | None = None,
+        probe=None,
+        duration_s: float = 60.0,
+        sampling_frequency: float = 2500.0,
+    ) -> None:
+        self._locations = locations
+        self._groups = groups
+        self._contact_ids = contact_ids
+        self._channel_ids = channel_ids
+        self._probe = probe
+        self._duration_s = duration_s
+        self._fs = sampling_frequency
+
+    def get_num_channels(self):
+        return self._locations.shape[0]
+
+    def get_duration(self):
+        return self._duration_s
+
+    def get_sampling_frequency(self):
+        return self._fs
+
+    def get_num_samples(self):
+        return int(round(self._duration_s * self._fs))
+
+    def get_channel_locations(self):
+        return self._locations
+
+    def get_property(self, name):
+        if name == "group":
+            return self._groups
+        if name == "contact_ids" and self._contact_ids is not None:
+            return self._contact_ids
+        raise KeyError(name)
+
+    def get_channel_ids(self):
+        if self._channel_ids is None:
+            return np.arange(self.get_num_channels())
+        return self._channel_ids
+
+    def get_probe(self):
+        if self._probe is None:
+            raise ValueError("No probe attached.")
+        return self._probe
+
+
+class _FakeProbe:
+    """Minimal probe exposing contact IDs and device channel indices."""
+
+    def __init__(
+        self, *, contact_ids: np.ndarray, device_channel_indices: np.ndarray
+    ):
+        self.contact_ids = contact_ids
+        self.device_channel_indices = device_channel_indices
 
 
 # ---------------------------------------------------------------------------
@@ -249,13 +332,40 @@ class TestCoherenceAndPsd:
         )
 
         for band_name in COHERENCE_BANDS:
-            key = (band_name, 1)
-            assert key in result.correlation
-            corr = result.correlation[key]
+            assert band_name in result.correlation
+            corr = result.correlation[band_name]
             assert corr.shape == (32, 32)
             np.testing.assert_allclose(np.diag(corr), 1.0, atol=0.05)
             assert np.all(corr >= -1.0 - 1e-6)
             assert np.all(corr <= 1.0 + 1e-6)
+
+    def test_multi_shank_correlation_is_full_matrix(self):
+        """Pairwise metrics are full collection matrices, not per-shank."""
+        groups = np.repeat([0, 1], 4)
+        locations = np.zeros((8, 2))
+        locations[:, 0] = groups * 250.0
+        locations[:, 1] = np.tile(np.arange(4) * 20.0, 2)
+        recording, _ = _make_synthetic_recording(
+            duration_sec=6.0,
+            fs=2500.0,
+            n_channels=8,
+            groups=groups,
+            locations=locations,
+        )
+        block = ExperimentBlock(
+            recording=recording, lfp_recording=None, block_index=0
+        )
+
+        result = _compute_all_metrics(
+            block,
+            window_interval=2.0,
+            window_duration=2.0,
+        )
+
+        for band_name in COHERENCE_BANDS:
+            assert result.correlation[band_name].shape == (8, 8)
+            assert result.coherency[band_name].shape == (8, 8)
+        assert [s.shank_index for s in result.shank_channels] == [1, 2]
 
     def test_coherency_is_complex(self):
         """Complex coherency should have magnitude <= 1."""
@@ -313,11 +423,212 @@ class TestProcessStreamFft:
             band_corr = output / "band_corr"
             assert band_corr.is_dir()
             for band in COHERENCE_BANDS:
+                assert (band_corr / f"{band}_mean_corr.npy").exists()
+                assert (band_corr / f"{band}_coherency.npy").exists()
                 assert (band_corr / f"{band}_shank1_mean_corr.npy").exists()
+                assert (band_corr / f"{band}_shank1_coherency.npy").exists()
+
+            row_channels_path = band_corr / "row_channels.json"
+            assert row_channels_path.exists()
+            with open(row_channels_path) as f:
+                row_channels = json.load(f)
+            assert row_channels["version"] == 3
+            assert row_channels["matrix_row_order"] == "channel_table"
+            assert row_channels["matrix_rows"] == list(range(32))
+            assert row_channels["shanks"]["0"]["rows"] == list(range(32))
 
             # Check channel metadata
             assert (output / "channels.localCoordinates.npy").exists()
             assert (output / "channels.rawInd.npy").exists()
+            assert (output / "channels.contactId.npy").exists()
+            assert (output / "channels.shankInd.npy").exists()
+
+    def test_writes_multi_shank_geometry_contract(self):
+        """Saved outputs include full matrices and explicit shank row maps."""
+        groups = np.repeat([0, 1], 4)
+        locations = np.zeros((8, 2))
+        locations[:, 0] = groups * 250.0
+        locations[:, 1] = np.tile(np.arange(4) * 20.0, 2)
+        recording, _ = _make_synthetic_recording(
+            duration_sec=6.0,
+            fs=2500.0,
+            n_channels=8,
+            groups=groups,
+            locations=locations,
+        )
+        block = ExperimentBlock(
+            recording=recording, lfp_recording=None, block_index=0
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir)
+            process_stream_fft(
+                block,
+                output,
+                compute_coherence=True,
+                rms_window_interval=2.0,
+                rms_window_duration=2.0,
+            )
+
+            band_corr = output / "band_corr"
+            full_corr = np.load(band_corr / "theta_mean_corr.npy")
+            shank1_corr = np.load(band_corr / "theta_shank1_mean_corr.npy")
+            shank2_corr = np.load(band_corr / "theta_shank2_mean_corr.npy")
+            assert full_corr.shape == (8, 8)
+            assert shank1_corr.shape == (4, 4)
+            assert shank2_corr.shape == (4, 4)
+
+            np.testing.assert_array_equal(
+                np.load(output / "channels.shankInd.npy"), groups
+            )
+            assert np.load(output / "channels.contactId.npy").shape == (8,)
+            with open(band_corr / "row_channels.json") as f:
+                row_channels = json.load(f)
+            assert row_channels["shanks"]["0"]["rows"] == [0, 1, 2, 3]
+            assert row_channels["shanks"]["1"]["rows"] == [4, 5, 6, 7]
+
+    def test_channel_table_deduplicates_same_location_across_blocks(self):
+        """Same electrode location in two blocks maps to one table row."""
+        groups = np.array([0, 0])
+        rec1 = _FakeRecording(
+            locations=np.array([[0.0, 0.0], [0.0, 20.0]]),
+            groups=groups,
+            contact_ids=np.array(["s0e0", "s0e1"]),
+        )
+        rec2 = _FakeRecording(
+            locations=np.array([[0.0, 0.0], [0.0, 20.0]]),
+            groups=groups,
+            contact_ids=np.array(["s0e0", "s0e1"]),
+        )
+
+        table, block_maps = build_channel_table([rec1, rec2])
+
+        assert table.local_coordinates.shape[0] == 2
+        np.testing.assert_array_equal(
+            table.contact_id, np.array(["s0e0", "s0e1"])
+        )
+        np.testing.assert_array_equal(block_maps[0], np.array([0, 1]))
+        np.testing.assert_array_equal(block_maps[1], np.array([0, 1]))
+
+    def test_channel_table_projects_probe_contact_ids_by_device_channel(self):
+        """Probe contact vectors are projected through device channel order."""
+        probe = _FakeProbe(
+            contact_ids=np.array(["e0", "e1"]),
+            device_channel_indices=np.array([0, 1]),
+        )
+        rec = _FakeRecording(
+            locations=np.array([[0.0, 20.0], [0.0, 0.0]]),
+            groups=np.array([0, 0]),
+            channel_ids=np.array(["1", "0"]),
+            probe=probe,
+        )
+
+        table, block_maps = build_channel_table([rec])
+
+        np.testing.assert_array_equal(table.contact_id, np.array(["e1", "e0"]))
+        np.testing.assert_array_equal(block_maps[0], np.array([0, 1]))
+
+    def test_channel_table_geometry_key_rounds_submicrometer_differences(
+        self,
+    ):
+        """Sub-micrometre differences round to the same integer key."""
+        groups = np.array([0, 0])
+        rec1 = _FakeRecording(
+            locations=np.array([[0.0, 0.0], [0.0, 20.0]]),
+            groups=groups,
+        )
+        rec2 = _FakeRecording(
+            locations=np.array([[0.0, 0.1], [0.0, 20.1]]),
+            groups=groups,
+        )
+
+        table, block_maps = build_channel_table([rec1, rec2])
+
+        # 0.1 µm difference rounds to the same integer µm -> deduplicates.
+        assert table.local_coordinates.shape[0] == 2
+        np.testing.assert_array_equal(block_maps[0], np.array([0, 1]))
+        np.testing.assert_array_equal(block_maps[1], np.array([0, 1]))
+
+    def test_normalized_channel_groups_prefers_contact_id_shank(self):
+        """Flat group + shank-prefixed contact ids -> physical shank wins.
+
+        Surface-finding blocks often report a flat ``group`` (all 0) even
+        though they span every shank; the physical shank must come from the
+        contact id prefix.
+        """
+        rec = _FakeRecording(
+            locations=np.array(
+                [[0.0, 0.0], [0.0, 20.0], [250.0, 0.0], [250.0, 20.0]]
+            ),
+            groups=np.array([0, 0, 0, 0]),
+            contact_ids=np.array(["s0e0", "s0e1", "s1e0", "s1e1"]),
+        )
+        np.testing.assert_array_equal(
+            normalized_channel_groups(rec), np.array([0, 0, 1, 1])
+        )
+
+    def test_channel_table_surface_finding_flat_group_deduplicates(self):
+        """Multi-shank surface block with flat group deduplicates via geometry.
+
+        The surface block's flat ``group`` (all 0) is irrelevant to
+        deduplication: global channel locations are unique per shank so the
+        integer-micrometre key correctly matches each electrode. shank_ind
+        comes from the first (main) recording, which has correct per-shank
+        groups resolved from contact id prefixes.
+        """
+        contact_ids = np.array(["s0e0", "s0e1", "s1e0", "s1e1"])
+        locations = np.array(
+            [[0.0, 0.0], [0.0, 20.0], [250.0, 0.0], [250.0, 20.0]]
+        )
+        main = _FakeRecording(  # correct per-shank groups
+            locations=locations,
+            groups=np.array([0, 0, 1, 1]),
+            contact_ids=contact_ids,
+        )
+        surface = _FakeRecording(  # flat group across all shanks
+            locations=locations,
+            groups=np.array([0, 0, 0, 0]),
+            contact_ids=contact_ids,
+        )
+
+        table, block_maps = build_channel_table([main, surface])
+
+        # Same physical contacts across blocks dedup to 4 rows (not 8).
+        assert table.local_coordinates.shape[0] == 4
+        np.testing.assert_array_equal(table.contact_id, contact_ids)
+        # shank_ind comes from main (first), which uses contact-id shank.
+        np.testing.assert_array_equal(table.shank_ind, np.array([0, 0, 1, 1]))
+        np.testing.assert_array_equal(block_maps[0], np.array([0, 1, 2, 3]))
+        np.testing.assert_array_equal(block_maps[1], np.array([0, 1, 2, 3]))
+
+    def test_channel_table_deduplicates_when_one_block_has_no_contact_ids(
+        self,
+    ):
+        """Absent contact ids in one block do not prevent deduplication.
+
+        Reproduces the NP2.0 single-shank defect: the main recording zarr had
+        contact ids but the surface zarr did not, so the old contact-id key
+        path doubled the channel table to 768 rows. The geometry key is now
+        primary so contact id availability is irrelevant to deduplication.
+        """
+        locations = np.array([[0.0, 0.0], [0.0, 20.0]])
+        groups = np.array([0, 0])
+        main = _FakeRecording(
+            locations=locations,
+            groups=groups,
+            contact_ids=np.array(["e0", "e1"]),
+        )
+        surface = _FakeRecording(
+            locations=locations,
+            groups=groups,
+            contact_ids=None,
+        )
+
+        table, block_maps = build_channel_table([main, surface])
+
+        assert table.local_coordinates.shape[0] == 2
+        np.testing.assert_array_equal(block_maps[0], np.array([0, 1]))
+        np.testing.assert_array_equal(block_maps[1], np.array([0, 1]))
 
     def test_main_tag_no_coherence(self):
         """Test tagged output without coherence."""
@@ -380,3 +691,133 @@ class TestProcessStreamFft:
         # Coherency is complex
         for coh in result.coherency.values():
             assert np.iscomplexobj(coh)
+
+
+# ---------------------------------------------------------------------------
+# Metric support (cross-block pairs, aggregation weights, block ordering)
+# ---------------------------------------------------------------------------
+
+
+def _support_block(
+    *,
+    locations: np.ndarray,
+    contact_ids: np.ndarray,
+    n_windows: int,
+    duration_s: float,
+) -> BlockMetrics:
+    """One BlockMetrics with all-ones metrics over the given contacts."""
+    n_ch = locations.shape[0]
+    rec = _FakeRecording(
+        locations=locations,
+        groups=np.zeros(n_ch, dtype=int),
+        contact_ids=contact_ids,
+        duration_s=duration_s,
+    )
+    return BlockMetrics(
+        block=ExperimentBlock(
+            recording=rec, lfp_recording=None, block_index=0
+        ),
+        rms_ap=np.ones((n_windows, n_ch), dtype=np.float32),
+        rms_lfp=np.ones((n_windows, n_ch), dtype=np.float32),
+        timestamps=np.arange(n_windows, dtype=float),
+        correlation={"theta": np.ones((n_ch, n_ch), dtype=np.float32)},
+        coherency={"theta": np.ones((n_ch, n_ch), dtype=np.complex64)},
+        psd_power=np.ones((2, n_ch), dtype=np.float32),
+        psd_freqs=np.array([1.0, 2.0]),
+        shank_channels=[
+            ShankChannels(
+                shank_index=1,
+                channel_indices=np.arange(n_ch),
+                locations=locations,
+            )
+        ],
+    )
+
+
+def _disjoint_blocks() -> list[BlockMetrics]:
+    """Two blocks covering non-overlapping depths on one shank."""
+    return [
+        _support_block(
+            locations=np.array([[0.0, 0.0], [0.0, 20.0]]),
+            contact_ids=np.array(["s0e0", "s0e1"]),
+            n_windows=240,
+            duration_s=1200.0,
+        ),
+        _support_block(
+            locations=np.array([[0.0, 40.0], [0.0, 60.0]]),
+            contact_ids=np.array(["s0e2", "s0e3"]),
+            n_windows=20,
+            duration_s=100.0,
+        ),
+    ]
+
+
+class TestMetricSupport:
+    """Support semantics for outputs assembled across blocks."""
+
+    def test_aggregate_per_channel_support_is_never_missing(self):
+        """The channel table is a union, so every row has PSD support."""
+        out = _assemble_blockwise_coherence(_disjoint_blocks())
+
+        assert out["psd_power"].shape[1] == 4
+        assert np.all(np.isfinite(out["psd_power"]))
+
+    def test_row_channels_records_aggregation_weights(self):
+        """``n_windows`` makes every row and pair weight derivable."""
+        out = _assemble_blockwise_coherence(_disjoint_blocks())
+        row_channels = out["row_channels"]
+
+        assert row_channels["version"] == 3
+        blocks = row_channels["shanks"]["0"]["blocks"]
+        assert [b["n_windows"] for b in blocks] == [240, 20]
+
+        # A row's weight is the sum over blocks whose rows contain it.
+        weight_by_row = {}
+        for block in blocks:
+            for row in block["rows"]:
+                weight_by_row[row] = (
+                    weight_by_row.get(row, 0) + block["n_windows"]
+                )
+        assert weight_by_row == {0: 240, 1: 240, 2: 20, 3: 20}
+
+    @pytest.mark.parametrize("main_first", [True, False])
+    def test_main_rms_saved_on_its_own_channel_table_rows(self, main_first):
+        """Saved RMS joins to ``channels.*`` in any block order."""
+        blocks = _disjoint_blocks()
+        ordered = blocks if main_first else [blocks[1], blocks[0]]
+        main = max(ordered, key=lambda r: r.block.duration)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stream = ProbeStream(
+                stream_name="Probe A-AP",
+                probe_name="ProbeA",
+                blocks=[b.block for b in ordered],
+                output_folder=Path(tmpdir) / "ProbeA",
+            )
+            _assemble_and_save_stream(
+                stream,
+                ordered,
+                rms_window_interval=30.0,
+                rms_window_duration=4.0,
+            )
+
+            coords = np.load(
+                stream.output_folder / "channels.localCoordinates.npy"
+            )
+            rms = np.load(
+                stream.output_folder / "_iblqc_ephysTimeRmsAPMain.rms.npy"
+            )
+
+        # Dense over the whole channel table, not just the main block.
+        assert rms.shape == (240, 4)
+
+        main_locations = main.block.recording.get_channel_locations()
+        observed = np.array(
+            [
+                bool(np.any(np.all(np.isclose(main_locations, c), axis=1)))
+                for c in coords
+            ]
+        )
+        assert observed.sum() == main_locations.shape[0]
+        assert np.all(np.isfinite(rms[:, observed]))
+        assert np.all(np.isnan(rms[:, ~observed]))
