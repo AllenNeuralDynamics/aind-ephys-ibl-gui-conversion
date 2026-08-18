@@ -1,5 +1,45 @@
 # TODO
 
+## Spike-Sorting Channel Support Sidecar
+
+The alignment GUI cannot reliably distinguish "spike-sorted channel with no
+accepted units" from "channel/chunk was never spike sorted" using the current
+ALF spike outputs. Unit depths only describe units that survived sorting/QC, and
+the continuous channel table describes recorded contacts rather than the sorter
+input support.
+
+Emit explicit spike-sorting support metadata from `extract_spikes` when the
+SortingAnalyzer exposes enough recording/channel information. The sidecar should
+be written per stream/probe and keyed by recording chunk/experiment where that
+identity is available. Each supported row should include enough identity for GUI
+joins and future validation:
+
+- canonical channel-table row when it can be resolved
+- `raw_ind`
+- `contact_id`
+- `shank_ind` when available
+- local coordinate/depth used to resolve the row
+- source analyzer/shank/chunk identifier
+
+Open questions:
+
+- Confirm whether current postprocessed SortingAnalyzer folders retain the
+  per-chunk recording identity after sorting. If they only expose a merged
+  recording, emit stream-level support and mark chunk-level support as unknown.
+- Decide whether missing support metadata should be a warning or an explicit
+  empty/unknown sidecar. Prefer explicit unknowns so consumers avoid treating
+  recorded geometry as sorter support.
+- Keep the GUI fallback conservative until this sidecar is present: unsupported
+  should mean "not proven sorted", not "no units found".
+
+Acceptance criteria:
+
+- A stream with sorting for only some chunks can tell the GUI which
+  chunk/channel rows were actually sorter inputs.
+- Channels included in sorting but containing no accepted units are marked
+  supported.
+- Existing `spikes.*.npy` and `clusters.*.npy` consumers remain compatible.
+
 ## Pairwise Metric Support For Correlation And Coherency
 
 Per-channel support is now explicit: RMS arrays are dense in channel-table row
