@@ -704,6 +704,8 @@ def _support_block(
     contact_ids: np.ndarray,
     n_windows: int,
     duration_s: float,
+    source: str | None = None,
+    metric_value: float = 1.0,
 ) -> BlockMetrics:
     """One BlockMetrics with all-ones metrics over the given contacts."""
     n_ch = locations.shape[0]
@@ -715,13 +717,20 @@ def _support_block(
     )
     return BlockMetrics(
         block=ExperimentBlock(
-            recording=rec, lfp_recording=None, block_index=0
+            recording=rec,
+            lfp_recording=None,
+            block_index=0,
+            source=source,
         ),
         rms_ap=np.ones((n_windows, n_ch), dtype=np.float32),
         rms_lfp=np.ones((n_windows, n_ch), dtype=np.float32),
         timestamps=np.arange(n_windows, dtype=float),
-        correlation={"theta": np.ones((n_ch, n_ch), dtype=np.float32)},
-        coherency={"theta": np.ones((n_ch, n_ch), dtype=np.complex64)},
+        correlation={
+            "theta": np.full((n_ch, n_ch), metric_value, dtype=np.float32)
+        },
+        coherency={
+            "theta": np.full((n_ch, n_ch), metric_value, dtype=np.complex64)
+        },
         psd_power=np.ones((2, n_ch), dtype=np.float32),
         psd_freqs=np.array([1.0, 2.0]),
         shank_channels=[
@@ -780,6 +789,61 @@ class TestMetricSupport:
                 )
         assert weight_by_row == {0: 240, 1: 240, 2: 20, 3: 20}
 
+    def test_coherence_can_use_only_surface_blocks(self):
+        """Explicit provenance controls coherency without removing PSD rows."""
+        locations = np.array([[0.0, 0.0], [0.0, 20.0]])
+        contact_ids = np.array(["s0e0", "s0e1"])
+        main = _support_block(
+            locations=locations,
+            contact_ids=contact_ids,
+            n_windows=10,
+            duration_s=1200.0,
+            source="main",
+            metric_value=0.25,
+        )
+        surface = _support_block(
+            locations=locations,
+            contact_ids=contact_ids,
+            n_windows=10,
+            duration_s=1200.0,
+            source="surface",
+            metric_value=0.75,
+        )
+
+        out = _assemble_blockwise_coherence(
+            [main, surface], coherence_block_source="surface"
+        )
+
+        np.testing.assert_allclose(out["correlation"]["theta"], 0.75)
+        np.testing.assert_allclose(out["psd_power"], 1.0)
+        assert [
+            block["used_for_coherence"] for block in out["channel_blocks"]
+        ] == [False, True]
+
+    def test_missing_requested_coherence_source_fails_clearly(self):
+        """A surface-only request cannot silently fall back to main data."""
+        with pytest.raises(ValueError, match="no 'surface' blocks"):
+            _assemble_blockwise_coherence(
+                [_disjoint_blocks()[0]],
+                coherence_block_source="surface",
+            )
+
+    def test_explicit_block_source_overrides_duration_heuristic(self):
+        """A long block from the surface asset remains a surface block."""
+        block = _support_block(
+            locations=np.array([[0.0, 0.0]]),
+            contact_ids=np.array(["s0e0"]),
+            n_windows=10,
+            duration_s=1200.0,
+            source="surface",
+        )
+
+        out = _assemble_blockwise_coherence(
+            [block], coherence_block_source="surface"
+        )
+
+        assert out["channel_blocks"][0]["label"] == "surface"
+
     @pytest.mark.parametrize("main_first", [True, False])
     def test_main_rms_saved_on_its_own_channel_table_rows(self, main_first):
         """Saved RMS joins to ``channels.*`` in any block order."""
@@ -807,6 +871,11 @@ class TestMetricSupport:
             rms = np.load(
                 stream.output_folder / "_iblqc_ephysTimeRmsAPMain.rms.npy"
             )
+            method = json.loads(
+                (
+                    stream.output_folder / "_iblqc_metrics.method.json"
+                ).read_text()
+            )
 
         # Dense over the whole channel table, not just the main block.
         assert rms.shape == (240, 4)
@@ -821,3 +890,5 @@ class TestMetricSupport:
         assert observed.sum() == main_locations.shape[0]
         assert np.all(np.isfinite(rms[:, observed]))
         assert np.all(np.isnan(rms[:, ~observed]))
+        assert method["version"] == "1.1"
+        assert method["parameters"]["coherence_block_source"] == "all"

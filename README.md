@@ -80,6 +80,7 @@ per-band RMS, PSD, and coherence files in IBL ALF format.
 | `rms_window_interval` | `30.0` | Gap between analysis windows (s); auto-shortened on short recordings to guarantee >= 20 windows |
 | `rms_window_duration` | `4.0` | Length of each analysis window (s) |
 | `num_parallel_jobs` | `4` | Concurrent block processing |
+| `coherence_block_source` | `"all"` | Blocks contributing to correlation/coherency: `"all"`, `"main"`, or `"surface"`. PSD, RMS, and channel metadata still use all blocks. |
 
 Coherence bands (from `metrics.COHERENCE_BANDS`):
 
@@ -170,7 +171,11 @@ RMS and PSD are computed via FFT, not time-domain filtering:
 - Hann-windowed segments, Welch-style PSD
 - Band-limited RMS via Parseval's theorem (integrate PSD over each band)
 - AP band: > 300 Hz (neural noise); LFP band: 1 -- 300 Hz
-- Common-mode rejection (CMR) is applied
+- Across-channel common-median referencing is applied.
+- Correlation and coherency combine all blocks by default. Set
+  `coherence_block_source="surface"` to exclude main-recording artifacts while
+  retaining surface-finding blocks; explicit asset provenance takes precedence
+  over the legacy duration heuristic.
 
 ## Adapting to your own data
 

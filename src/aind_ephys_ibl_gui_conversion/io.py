@@ -4,6 +4,7 @@ import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import spikeinterface as si
@@ -12,6 +13,7 @@ from aind_ephys_ibl_gui_conversion.channel_metadata import (
     build_channel_table,
 )
 from aind_ephys_ibl_gui_conversion.metrics import (
+    CoherenceBlockSource,
     _assemble_blockwise_coherence,
     _build_channel_maps,
     _build_row_channels_metadata,
@@ -40,6 +42,7 @@ def load_probe_streams(
     results_folder: Path,
     stream_to_use: str | None = None,
     main_recording_min_secs: int = 600,
+    block_source: Literal["main", "surface"] | None = None,
 ) -> list[ProbeStream]:
     """Load raw (unfiltered) recordings into ProbeStream objects.
 
@@ -60,6 +63,9 @@ def load_probe_streams(
         If provided, only process this stream.
     main_recording_min_secs : int
         Minimum duration to classify as main (vs surface).
+    block_source : {"main", "surface"} or None
+        Provenance for every block loaded from this asset. ``None`` preserves
+        duration-based classification for compatibility.
 
     Returns
     -------
@@ -161,6 +167,7 @@ def load_probe_streams(
                     recording=rec,
                     lfp_recording=lfp_rec,
                     block_index=block_index,
+                    source=block_source,
                 )
             )
 
@@ -280,6 +287,7 @@ def _save_combined_rms_summary(
 def _save_spectral_outputs(
     output_folder: Path,
     results: list[BlockMetrics],
+    coherence_block_source: CoherenceBlockSource = "all",
 ) -> None:
     """Save PSD, correlation, and coherency from one or more blocks.
 
@@ -288,7 +296,10 @@ def _save_spectral_outputs(
     matrices using ``row_channels.json``.
     """
     if len(results) > 1:
-        assembled = _assemble_blockwise_coherence(results)
+        assembled = _assemble_blockwise_coherence(
+            results,
+            coherence_block_source=coherence_block_source,
+        )
         psd_power = assembled["psd_power"]
         psd_freqs = assembled["psd_freqs"]
         correlation = assembled["correlation"]
@@ -299,8 +310,12 @@ def _save_spectral_outputs(
         r = results[0]
         psd_power = r.psd_power
         psd_freqs = r.psd_freqs
-        correlation = r.correlation
-        coherency = r.coherency
+        assembled = _assemble_blockwise_coherence(
+            results,
+            coherence_block_source=coherence_block_source,
+        )
+        correlation = assembled["correlation"]
+        coherency = assembled["coherency"]
         channel_blocks = None
         channel_table, block_maps, _ = _build_channel_maps(results)
         row_channels = _build_row_channels_metadata(
@@ -369,6 +384,7 @@ def _save_method_metadata(
     output_folder: Path,
     rms_window_interval: float,
     rms_window_duration: float,
+    coherence_block_source: CoherenceBlockSource,
 ) -> None:
     """Save method metadata for forward compatibility.
 
@@ -378,7 +394,7 @@ def _save_method_metadata(
     """
     metadata = {
         "method": "fft_coherence",
-        "version": "1.0",
+        "version": "1.1",
         "metrics": {
             "rms": "parseval_fft",
             "band_corr": "magnitude_squared_coherence",
@@ -388,6 +404,7 @@ def _save_method_metadata(
             "rms_window_interval_s": rms_window_interval,
             "rms_window_duration_s": rms_window_duration,
             "cmr": True,
+            "coherence_block_source": coherence_block_source,
         },
     }
     path = output_folder / "_iblqc_metrics.method.json"
@@ -420,6 +437,7 @@ def _assemble_and_save_stream(
     results: list[BlockMetrics],
     rms_window_interval: float,
     rms_window_duration: float,
+    coherence_block_source: CoherenceBlockSource = "all",
 ) -> None:
     """Assemble block results and save all outputs for one stream.
 
@@ -463,7 +481,11 @@ def _assemble_and_save_stream(
     if stream.has_surface:
         # Combined: probe summary RMS + coherence + channel metadata
         _save_combined_rms_summary(output_folder, results)
-        _save_spectral_outputs(output_folder, results)
+        _save_spectral_outputs(
+            output_folder,
+            results,
+            coherence_block_source=coherence_block_source,
+        )
         _save_channel_metadata(
             output_folder,
             [b.recording for b in stream.blocks],
@@ -486,13 +508,18 @@ def _assemble_and_save_stream(
             row_map=main_row_map,
             n_rows=n_rows,
         )
-        _save_spectral_outputs(output_folder, [main_result])
+        _save_spectral_outputs(
+            output_folder,
+            [main_result],
+            coherence_block_source=coherence_block_source,
+        )
         _save_channel_metadata(output_folder, [main_result.block.recording])
 
     _save_method_metadata(
         output_folder,
         rms_window_interval=rms_window_interval,
         rms_window_duration=rms_window_duration,
+        coherence_block_source=coherence_block_source,
     )
 
 

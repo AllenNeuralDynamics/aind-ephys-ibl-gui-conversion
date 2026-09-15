@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import spikeinterface as si
@@ -16,6 +17,7 @@ class ExperimentBlock:
     recording: si.BaseRecording
     lfp_recording: si.BaseRecording | None  # 1.0 probes only
     block_index: int
+    source: Literal["main", "surface"] | None = None
 
     @property
     def is_1_0(self) -> bool:

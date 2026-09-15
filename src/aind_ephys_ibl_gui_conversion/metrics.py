@@ -1,6 +1,7 @@
 """FFT-based ephys metric computation."""
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Literal
 
 import numpy as np
 import scipy.fft
@@ -28,6 +29,18 @@ COHERENCE_BANDS: dict[str, tuple[float, float]] = {
     "beta": (30, 100),
     "gamma": (100, 300),
 }
+
+CoherenceBlockSource = Literal["all", "main", "surface"]
+
+
+def block_source(
+    block: ExperimentBlock,
+    main_recording_min_secs: float = 600.0,
+) -> Literal["main", "surface"]:
+    """Return explicit block provenance, with a duration fallback."""
+    if block.source is not None:
+        return block.source
+    return "main" if block.duration >= main_recording_min_secs else "surface"
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +329,7 @@ def _compute_all_metrics(  # noqa: C901
                 # --- 2.0: wideband ---
                 lfp_raw = raw
 
-            # CMR + demean + Hann window -> single FFT
+            # Common-median reference + demean + Hann -> one FFT.
             np.subtract(
                 lfp_raw,
                 np.median(lfp_raw, axis=1, keepdims=True),
@@ -432,11 +445,7 @@ def _build_row_channels_metadata(
             if not match:
                 continue
             rec = result.block.recording
-            label = (
-                "main"
-                if rec.get_duration() >= main_recording_min_secs
-                else "surface"
-            )
+            label = block_source(result.block, main_recording_min_secs)
             rows = block_map[match[0].channel_indices].astype(int).tolist()
             block_entries.append(
                 {
@@ -468,6 +477,7 @@ def _build_row_channels_metadata(
 def _assemble_blockwise_coherence(
     results: list[BlockMetrics],
     main_recording_min_secs: float = 600.0,
+    coherence_block_source: CoherenceBlockSource = "all",
 ) -> dict:
     """Assemble per-block coherence into full channel-table matrices.
 
@@ -477,6 +487,9 @@ def _assemble_blockwise_coherence(
         Per-block results from ``_compute_all_metrics``.
     main_recording_min_secs : float
         Duration threshold to classify blocks as main vs surface.
+    coherence_block_source : {"all", "main", "surface"}
+        Which block provenance contributes to correlation and coherency.
+        PSD and channel support continue to include every block.
 
     Returns
     -------
@@ -487,6 +500,17 @@ def _assemble_blockwise_coherence(
     channel_table, block_channel_maps, total_n_channels = _build_channel_maps(
         results
     )
+    coherence_result_ids = {
+        id(result)
+        for result in results
+        if coherence_block_source == "all"
+        or block_source(result.block, main_recording_min_secs)
+        == coherence_block_source
+    }
+    if not coherence_result_ids:
+        raise ValueError(
+            f"no {coherence_block_source!r} blocks are available for coherency"
+        )
 
     # Assemble full matrices with n_windows-weighted averaging for overlaps.
     combined_correlation = {}
@@ -503,6 +527,8 @@ def _assemble_blockwise_coherence(
             (total_n_channels, total_n_channels), dtype=np.float32
         )
         for ch_map, result in zip(block_channel_maps, results, strict=True):
+            if id(result) not in coherence_result_ids:
+                continue
             if band_name not in result.correlation:
                 continue
             n_win = result.rms_ap.shape[0]
@@ -534,11 +560,7 @@ def _assemble_blockwise_coherence(
     channel_blocks_meta = []
     for block_idx, (r, ch_map) in enumerate(zip(results, block_channel_maps)):
         rec = r.block.recording
-        label = (
-            "main"
-            if rec.get_duration() >= main_recording_min_secs
-            else "surface"
-        )
+        label = block_source(r.block, main_recording_min_secs)
         channel_blocks_meta.append(
             {
                 "block_index": block_idx,
@@ -546,6 +568,8 @@ def _assemble_blockwise_coherence(
                 "label": label,
                 "n_channels": rec.get_num_channels(),
                 "duration_s": float(rec.get_duration()),
+                "used_for_coherence": coherence_block_source == "all"
+                or label == coherence_block_source,
             }
         )
 

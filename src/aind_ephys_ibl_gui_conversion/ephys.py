@@ -21,9 +21,11 @@ from aind_ephys_ibl_gui_conversion.io import (
 )
 from aind_ephys_ibl_gui_conversion.metrics import (
     COHERENCE_BANDS,
+    CoherenceBlockSource,
     _assemble_blockwise_coherence,
     _compute_all_metrics,
     _parseval_rms,
+    block_source,
 )
 from aind_ephys_ibl_gui_conversion.recording_utils import (
     _merge_separate_asset_recording_dicts,
@@ -132,6 +134,7 @@ def extract_continuous(
     lfp_correlation_min_secs: int = 600,
     lfp_correlation_num_bins: int = 5,
     lfp_bandpass_margin_ms: float = 3000.0,
+    coherence_block_source: CoherenceBlockSource = "all",
 ):
     """Extract QC metrics from raw ephys data using FFT-based computation.
 
@@ -167,9 +170,17 @@ def extract_continuous(
         when the caller knows the raw folder's location (e.g. a pipeline that
         mounts raw and sorted assets under unrelated parents) so the sibling
         assumption is not required.
+    coherence_block_source : {"all", "main", "surface"}
+        Block provenance used to aggregate correlation and coherency. Other
+        metrics and channel metadata continue to use all blocks.
     """
     if session_folder is None:
         session_folder = Path(str(sorting_folder).split("_sorted")[0])
+    if coherence_block_source not in {"all", "main", "surface"}:
+        raise ValueError(
+            "coherence_block_source must be 'all', 'main', or 'surface'"
+        )
+    logging.info("[FFT] Coherency blocks=%s", coherence_block_source)
 
     # Enable multi-threaded wavpack decompression if available
     try:
@@ -234,8 +245,25 @@ def extract_continuous(
             results_folder,
             stream_to_use=stream_to_use,
             main_recording_min_secs=main_recording_min_secs,
+            block_source="surface",
         )
         streams = merge_probe_streams(streams, surface_streams)
+
+    if coherence_block_source != "all":
+        missing = [
+            stream.probe_name
+            for stream in streams
+            if not any(
+                block_source(block, main_recording_min_secs)
+                == coherence_block_source
+                for block in stream.blocks
+            )
+        ]
+        if missing:
+            raise ValueError(
+                f"coherence_block_source={coherence_block_source!r} has no "
+                f"matching blocks for stream(s): {', '.join(missing)}"
+            )
 
     # Divide FFT threads across pool workers to avoid oversubscription
     n_cpus = os.cpu_count() or 1
@@ -313,6 +341,7 @@ def extract_continuous(
             results,
             rms_window_interval=rms_window_interval,
             rms_window_duration=rms_window_duration,
+            coherence_block_source=coherence_block_source,
         )
 
     total_elapsed = (datetime.now() - start).total_seconds()
