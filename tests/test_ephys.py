@@ -1,5 +1,6 @@
 """Tests for ephys module."""
 
+import tempfile
 import unittest
 from collections import defaultdict
 from pathlib import Path
@@ -8,6 +9,7 @@ import spikeinterface as si
 from spikeinterface.extractors import toy_example
 
 from aind_ephys_ibl_gui_conversion.ephys import _results_in_block_order
+from aind_ephys_ibl_gui_conversion.io import load_probe_streams
 from aind_ephys_ibl_gui_conversion.recording_utils import (
     _merge_separate_asset_recording_dicts,
     _stream_matches,
@@ -303,3 +305,43 @@ class TestSurfaceFindingBlockCounts(unittest.TestCase):
         ordered = _results_in_block_order(a, pairs)
 
         self.assertEqual([r.block for r in ordered], [a.blocks[0]])
+
+
+class TestExperimentNumbering(unittest.TestCase):
+    """Blocks map to the experiments on disk, not to 1..N."""
+
+    STREAM = "Record Node 101#Neuropix-PXI-116.46811"
+
+    def _write(self, folder, experiment, n_samples):
+        rec, _ = toy_example(
+            num_channels=4, duration=n_samples / 30000.0, seed=experiment
+        )
+        rec.save(
+            folder=folder / f"experiment{experiment}_{self.STREAM}.zarr",
+            format="zarr",
+        )
+
+    def test_gapped_experiment_numbers_load_in_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            self._write(folder, 2, 3000)
+            self._write(folder, 3, 6000)
+
+            (stream,) = load_probe_streams(
+                [self.STREAM], 2, folder, folder / "results"
+            )
+
+            self.assertEqual(
+                [b.recording.get_num_samples() for b in stream.blocks],
+                [3000, 6000],
+            )
+
+    def test_block_count_mismatch_raises(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            self._write(folder, 2, 3000)
+
+            with self.assertRaises(FileNotFoundError):
+                load_probe_streams(
+                    [self.STREAM], 2, folder, folder / "results"
+                )

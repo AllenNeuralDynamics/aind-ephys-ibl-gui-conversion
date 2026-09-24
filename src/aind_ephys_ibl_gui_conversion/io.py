@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Literal
@@ -33,6 +34,32 @@ from aind_ephys_ibl_gui_conversion.types import (
 # ---------------------------------------------------------------------------
 # Recording loading
 # ---------------------------------------------------------------------------
+
+_EXPERIMENT_ZARR = re.compile(r"experiment(\d+)_(.+)\.zarr")
+
+
+def _experiment_numbers(
+    ecephys_compressed_folder: Path, stream_name: str, num_blocks: int
+) -> list[int]:
+    """Return the Open Ephys experiment numbers of one stream, ascending.
+
+    Experiments deleted before upload leave gaps (e.g. ``experiment2`` and
+    ``experiment3`` only), so block ``i`` is the ``i``-th experiment on disk,
+    not ``experiment{i + 1}``. Ascending order matches neo's block order.
+    """
+    numbers = sorted(
+        int(m.group(1))
+        for path in Path(ecephys_compressed_folder).iterdir()
+        if (m := _EXPERIMENT_ZARR.fullmatch(path.name))
+        and m.group(2) == stream_name
+    )
+    if len(numbers) != num_blocks:
+        raise FileNotFoundError(
+            f"Expected {num_blocks} experiment zarr(s) for stream "
+            f"{stream_name!r} in {ecephys_compressed_folder}, found "
+            f"{len(numbers)}: experiment numbers {numbers}"
+        )
+    return numbers
 
 
 def load_probe_streams(
@@ -79,6 +106,13 @@ def load_probe_streams(
         if "LFP" not in s and _stream_matches(s, stream_to_use)
     ]
 
+    experiment_numbers = {
+        stream_name: _experiment_numbers(
+            ecephys_compressed_folder, stream_name, num_blocks
+        )
+        for stream_name in ap_streams
+    }
+
     # Build list of all zarr paths to load in parallel
     load_items = []
     for stream_name in ap_streams:
@@ -95,16 +129,17 @@ def load_probe_streams(
     def _load_one(item):
         """Load one zarr recording's metadata."""
         stream_name, block_index, is_lfp = item
+        experiment = experiment_numbers[stream_name][block_index]
         if is_lfp:
             lfp_stream_name = stream_name.replace("AP", "LFP")
             zarr_path = (
                 ecephys_compressed_folder
-                / f"experiment{block_index + 1}_{lfp_stream_name}.zarr"
+                / f"experiment{experiment}_{lfp_stream_name}.zarr"
             )
         else:
             zarr_path = (
                 ecephys_compressed_folder
-                / f"experiment{block_index + 1}_{stream_name}.zarr"
+                / f"experiment{experiment}_{stream_name}.zarr"
             )
         if is_lfp and not zarr_path.exists():
             return item, None
