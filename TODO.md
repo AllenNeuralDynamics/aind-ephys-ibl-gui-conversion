@@ -309,7 +309,11 @@ near its gate.
 Decided: the band is 300 Hz–15 kHz and only the accepted lines are stored; a
 driven tone is declared, not inferred from the spectrum; lines are detected and
 transitions fitted across blocks, with per-block baselines; no LF/HF fallback
-is emitted, since it lands about 300 um too shallow.
+is emitted, since it lands about 300 um too shallow. Lines are found by ring
+excess, not a harmonic F-test: on the 46101 shanks the F-test (NW 4 over 4 s,
+or NW 3 over 1 s) found only the two phase-stable lines of the four or five
+that step, missed the line carrying the most support, found none of its own,
+and cost about six times as many FFTs.
 
 Open questions:
 
