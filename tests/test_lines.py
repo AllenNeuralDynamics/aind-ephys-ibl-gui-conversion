@@ -13,6 +13,7 @@ from aind_ephys_ibl_gui_conversion.lines import (
     LineAccumulator,
     LineParams,
     fit_transitions,
+    pool_lines,
 )
 from aind_ephys_ibl_gui_conversion.metrics import _compute_all_metrics
 from aind_ephys_ibl_gui_conversion.types import ExperimentBlock, ProbeStream
@@ -72,10 +73,13 @@ def _recording(traces: np.ndarray, fs: float = FS) -> si.NumpyRecording:
     return rec
 
 
-def _save(block: ExperimentBlock, out: Path, **kwargs) -> dict:
-    stream = ProbeStream("s", "ProbeA", [block], out)
+def _save(
+    block: ExperimentBlock | list[ExperimentBlock], out: Path, **kwargs
+) -> dict:
+    blocks = block if isinstance(block, list) else [block]
+    stream = ProbeStream("s", "ProbeA", blocks, out)
     _assemble_and_save_stream(
-        stream, [_compute_all_metrics(block)], 30.0, 4.0, **kwargs
+        stream, [_compute_all_metrics(b) for b in blocks], 30.0, 4.0, **kwargs
     )
     return json.loads((out / "brain_surface.json").read_text())
 
@@ -100,6 +104,22 @@ class TestLineAccumulator:
         amps_uv = found.amps_v[0] * 1e6
         assert np.median(amps_uv[out]) == pytest.approx(20.0, rel=0.05)
         assert np.median(amps_uv[~out]) == pytest.approx(2.0, rel=0.1)
+
+    def test_pooled_line_measured_in_every_block(self):
+        """A line seen in one block only is reported by both, at background
+        level where it is absent."""
+        n = int(4.0 * FS)
+        accs = [LineAccumulator(n, FS, N_CHANNELS, LineParams()) for _ in "ab"]
+        for w in range(4):
+            accs[0].add_spectrum(_traces(4.0, np.zeros(N_CHANNELS), seed=w))
+            accs[1].add_spectrum(
+                _traces(4.0, np.full(N_CHANNELS, 5.0), seed=10 + w)
+            )
+        quiet, loud = pool_lines(accs, LineParams())
+        assert quiet.freqs_hz == pytest.approx(loud.freqs_hz)
+        assert abs(loud.freqs_hz[0] - LINE_HZ) < 0.25
+        assert np.median(loud.amps_v[0]) * 1e6 == pytest.approx(5.0, rel=0.05)
+        assert np.median(quiet.amps_v[0]) * 1e6 < 1.0
 
     def test_noise_detects_no_line(self):
         """White noise yields no line under the FDR gate."""
@@ -194,6 +214,73 @@ class TestFitTransitions:
         assert found == []
 
 
+class TestPooledBlocks:
+    """One fit over every block that recorded a shank."""
+
+    @staticmethod
+    def _tiled(rms: np.ndarray, offsets_db: list[float]):
+        """Lower and upper halves of the shank as two blocks, each block's
+        lines shifted by its offset."""
+        blocks = (np.arange(N_CHANNELS) >= N_CHANNELS // 2).astype(int)
+        gain = 10 ** (np.asarray(offsets_db)[blocks] / 20)
+        return _jittered(rms) * gain, blocks
+
+    def test_offset_between_blocks_is_not_a_transition(self):
+        """Lines whose level differs between two blocks tiling the shank
+        give no candidate, where one block would place one at the seam."""
+        amps, blocks = self._tiled(np.full((3, N_CHANNELS), 5.0), [0.0, 8.0])
+        params = LineParams()
+        assert fit_transitions(amps, _locations(), params, blocks=blocks) == []
+        seam = _depths()[N_CHANNELS // 2] - PITCH_UM / 2
+        found = fit_transitions(amps, _locations(), params)
+        assert [t["midpoint_um"] for t in found] == [seam]
+
+    def test_surface_found_across_offset_blocks(self):
+        """A step inside one block is located with each block's own
+        baseline."""
+        rms = np.tile(_stepped_rms(), (3, 1))
+        amps, blocks = self._tiled(rms, [0.0, -6.0])
+        found = fit_transitions(
+            amps, _locations(), LineParams(), blocks=blocks
+        )
+        assert [t["midpoint_um"] for t in found] == [SURFACE_MID_UM]
+        baseline = found[0]["lines"][0]["baseline_db"]
+        assert baseline[1] - baseline[0] == pytest.approx(-6.0, abs=1.0)
+        assert found[0]["lines"][0]["step_db"] == pytest.approx(20.0, abs=1.0)
+
+    def test_repeat_blocks_are_replicates(self):
+        """Two recordings of the same channels at different line levels
+        agree on one transition."""
+        rms = np.tile(_stepped_rms(), (2, 1))
+        amps = np.hstack(
+            [_jittered(rms, seed=1), _jittered(rms, seed=2) * 10 ** (4 / 20)]
+        )
+        found = fit_transitions(
+            amps,
+            np.vstack([_locations()] * 2),
+            LineParams(),
+            blocks=np.repeat([0, 1], N_CHANNELS),
+        )
+        assert [t["midpoint_um"] for t in found] == [SURFACE_MID_UM]
+
+    def test_noisy_block_adds_little_evidence(self):
+        """A far noisier replicate block neither discounts nor inflates the
+        clean block's evidence."""
+        rms = np.tile(_stepped_rms(), (3, 1))
+        clean = _jittered(rms, seed=1)
+        alone = fit_transitions(clean, _locations(), LineParams())
+        pooled = fit_transitions(
+            np.hstack([clean, _jittered(rms, sd_db=3.0, seed=2)]),
+            np.vstack([_locations()] * 2),
+            LineParams(),
+            blocks=np.repeat([0, 1], N_CHANNELS),
+        )
+        assert [t["midpoint_um"] for t in pooled] == [SURFACE_MID_UM]
+        assert pooled[0]["delta_bic"] == pytest.approx(
+            alone[0]["delta_bic"], rel=0.05
+        )
+
+
 class TestUnreferencedLines:
     """Lines must be measured before the common-median reference."""
 
@@ -202,7 +289,7 @@ class TestUnreferencedLines:
         full amplitude on a wideband 2.0 recording."""
         uniform = np.full(N_CHANNELS, 5.0)
         block = ExperimentBlock(_recording(_traces(12.0, uniform)), None, 0)
-        found = _compute_all_metrics(block).lines
+        found = _compute_all_metrics(block).line_power.finalize()
         assert abs(found.freqs_hz[0] - LINE_HZ) < 0.25
         assert np.median(found.amps_v[0]) * 1e6 == pytest.approx(5.0, rel=0.05)
 
@@ -216,7 +303,7 @@ class TestUnreferencedLines:
             fs=2500.0,
         )
         block = ExperimentBlock(_recording(_traces(12.0, uniform)), lfp, 0)
-        found = _compute_all_metrics(block).lines
+        found = _compute_all_metrics(block).line_power.finalize()
         assert np.median(found.amps_v[0]) * 1e6 == pytest.approx(5.0, rel=0.05)
 
 
@@ -224,10 +311,14 @@ class TestLineOutputs:
     """Saved artifacts and brain_surface.json."""
 
     @staticmethod
-    def _stepped_block() -> ExperimentBlock:
+    def _stepped_block(
+        gain: float = 1.0, seed: int = 0, block_index: int = 0
+    ) -> ExperimentBlock:
         down = np.where(_depths() > SURFACE_UM, 2.0, 12.0)
-        traces = _traces(12.0, _stepped_rms(), second_rms_uv=down)
-        return ExperimentBlock(_recording(traces), None, 0)
+        traces = _traces(
+            12.0, gain * _stepped_rms(), seed=seed, second_rms_uv=gain * down
+        )
+        return ExperimentBlock(_recording(traces), None, block_index)
 
     def test_candidates_saved(self):
         """Two lines stepping at the surface give one lines candidate whose
@@ -243,11 +334,41 @@ class TestLineOutputs:
         assert amps.shape == (freqs.size, N_CHANNELS)
         assert len(surface["lines"]) == freqs.size
         stepped = [
-            line["row"] for line in candidate["lines"] if line["agrees"]
+            line["amplitude_rows"]["0"]
+            for line in candidate["lines"]
+            if line["agrees"]
         ]
         assert freqs[stepped] == pytest.approx(
             [LINE_HZ, SECOND_LINE_HZ], abs=0.25
         )
+
+    def test_blocks_pooled_into_one_candidate(self):
+        """Two recordings of the shank at different line levels share their
+        lines and give one candidate drawing on both."""
+        blocks = [
+            self._stepped_block(),
+            self._stepped_block(gain=2.0, seed=5, block_index=1),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            surface = _save(blocks, out)
+            freqs = np.load(out / "_iblqc_ephysLineAmplitude.freqs.npy")
+        (candidate,) = surface["shanks"]["0"]["candidates"]
+        assert candidate["midpoint_um"] == SURFACE_MID_UM
+        assert candidate["block_indices"] == [0, 1]
+        n_lines = candidate["n_lines"]
+        assert freqs.size == 2 * n_lines
+        for line in candidate["lines"]:
+            rows = line["amplitude_rows"]
+            assert freqs[[rows["0"], rows["1"]]] == pytest.approx(
+                [line["freq_hz"]] * 2
+            )
+        offsets = [
+            line["baseline_db"]["1"] - line["baseline_db"]["0"]
+            for line in candidate["lines"]
+            if line["agrees"]
+        ]
+        assert offsets == pytest.approx([6.0] * len(offsets), abs=1.0)
 
     def test_declared_driven_tone(self):
         """A declared tone is also fitted alone as a driven candidate."""

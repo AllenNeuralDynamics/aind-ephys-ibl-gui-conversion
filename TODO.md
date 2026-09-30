@@ -160,15 +160,26 @@ already in memory, so this costs no extra I/O:
 Accumulate unreferenced Hann power per channel over 300 Hz–15 kHz, then, after
 the loop (`lines.py`):
 
-- **Detect** lines as peaks of the across-channel median of each channel's
-  power over a ring of background around it (inner 3 Hz, outer 25 Hz half-width),
-  thinned to the inner half-width and kept above 3 dB excess; the strongest 8
-  are measured. Each line's amplitude integrates the inner band, background
-  included, in V rms.
-- **Fit transitions** per shank and block, never across blocks. Each line's dB
-  profile along depth is `a + c*y + sum_t b_t * logistic((y - y_t) / w_t)`: the
-  locations `y_t` are shared by every line, while the baseline, linear trend,
-  step and the two widths either side of `y_t` are each line's own. A line may
+- **Detect** lines across all blocks of the stream: per block, the
+  across-channel median of each channel's power over a ring of background
+  around it (inner 3 Hz, outer 25 Hz half-width); pooled by the largest over
+  blocks, thinned to the inner half-width and kept above 3 dB excess, strongest
+  `n_lines` first. Every line is measured in every block, so all blocks report
+  the same lines whether or not each sees them. Each line's amplitude
+  integrates the inner band, background included, in V rms. This keeps each
+  block's accumulated power until the stream is saved, about 90 MB per block.
+- **Fit transitions** once per shank over every block that recorded it. Each
+  line's dB profile along depth is `a_b + c*y + sum_t b_t * logistic((y - y_t) /
+  w_t)`: the locations `y_t` are shared by every line, while the linear trend,
+  step and the two widths either side of `y_t` are each line's own, and the
+  baseline `a_b` is its own per block. A line's level drifts between recordings
+  by several dB — 1–5 dB, up to 9, across the bank boundaries of blocks tiling
+  a shank, against under 0.5 dB over the same distance within a block — so a
+  shared baseline would put a transition at every seam. The cost is that a
+  transition only counts where one block has `min_side` channels on each side
+  of it; a boundary between tiling blocks is never a candidate. Outlier
+  replacement, channel-to-channel noise and neighbour correlation are all taken
+  within blocks. A line may
   step by any amount, either sign, or not at all; the trend absorbs smooth depth
   gradients so they are not read as a transition. Widths run from a hard step
   to 120 um. Dead and noisy channels (AP RMS below 0.15× or above 6× the shank
@@ -179,11 +190,14 @@ the loop (`lines.py`):
   second boundary is common and can be as strong as the surface. The largest
   number of transitions that all pass is kept.
 - **Gate** each transition on per-line support, the weighted fit gain from
-  adding it, with each line's residual variance deflated for correlation
-  between neighbouring channels. A line agrees when its support beats a BIC
+  adding it, weighting each line in each block by that block's residual
+  variance deflated for its own neighbour correlation, so a noisy block adds
+  little evidence and does not discount a clean one. A line agrees when its support beats a BIC
   penalty for its step and two grid-searched widths; the transition passes when
-  at least two lines agree and the summed support clears the penalty by
-  `min_delta_bic` (500, provisional). The BIC penalty alone admits in-tissue
+  at least two lines agree and their support beyond the penalty, summed over
+  the agreeing lines only, clears `min_delta_bic` (500, provisional). Lines
+  that do not step cost nothing, so the gate does not tighten with
+  `n_lines`. The BIC penalty alone admits in-tissue
   features, so this gate needs calibrating against insertion depths.
 - A **declared** driven tone (`extract_continuous(driven_tone_hz=)`) is also
   fitted alone, one transition and one agreeing line, and kept as a `driven`
@@ -204,16 +218,23 @@ row position is the only join key. Write from `io.py` beside
 `_save_spectral_outputs`, reusing `_on_channel_table_rows` for the dense fill
 and `_build_row_channels_metadata` for provenance.
 
-- `_iblqc_ephysLineAmplitude.amps.npy` — `(n_lines, n_rows)` float32, V rms per
-  channel per line, matching the RMS artifacts' units rather than the PSD's.
-- `_iblqc_ephysLineAmplitude.freqs.npy` — `(n_lines,)` float64, Hz.
-- `brain_surface.json` — per shank, `candidates`: every passing transition from
-  every block, strongest `delta_bic` first, each with `method` (`lines` /
-  `driven`), `block_index`, `label`, `midpoint_um` (probe-local y), `width_um`
-  (median 10–90 % extent over agreeing lines), `interval_um`, `delta_bic`,
-  `n_agreeing_lines`, `n_lines`, and per line its `row` into the amplitude
-  arrays, `step_db`, the two logistic widths, `support` and `agrees`; plus a
-  top-level `lines` table aligned with the amplitude rows. None is chosen as
+- `_iblqc_ephysLineAmplitude.amps.npy` — `(n_blocks * n_lines, n_rows)`
+  float32, V rms per channel, one row per line per block, `NaN` off that
+  block's rows; matching the RMS artifacts' units rather than the PSD's. Rows
+  are not merged across blocks, since repeat recordings share channel rows and
+  their levels differ.
+- `_iblqc_ephysLineAmplitude.freqs.npy` — aligned float64, Hz.
+- `brain_surface.json` — per shank, `candidates`: every passing transition,
+  strongest `delta_bic` first, each with `method` (`lines` / `driven`),
+  `block_indices` (the blocks fitted), `midpoint_um` (probe-local y),
+  `width_um` (median 10–90 % extent over agreeing lines), `interval_um`,
+  `delta_bic`, `n_agreeing_lines`, `n_lines`, and per line its `line_index`,
+  `freq_hz`, `amplitude_rows` (block index to amplitude row), `step_db`, the
+  two logistic widths, `support`, `agrees`, and the joint fit's `baseline_db`
+  per block at the tip and `trend_db_per_mm`, from which the GUI draws the
+  fitted curve. A top-level `lines` table is aligned with the amplitude rows:
+  one row per line per block, with `line_index`, `block_index`, `label` and
+  that block's `excess_db`. None is chosen as
   the surface. Read it directly, the way `session_notes.txt` and
   `spike_shank_indices.npy` are read in `EphysDataService._load_session_notes`
   and `_attach_optional_shank_arrays`; `alfio.load_object` will not load it.
@@ -222,9 +243,9 @@ Both are optional. A stream with no usable line writes the amplitude arrays it
 did measure and empty `candidates` — explicit unknown, not a missing file,
 matching the preference stated in the spike-sorting sidecar section above.
 
-Extend `BlockMetrics` in `types.py` with the new arrays; keep the per-block
-provenance that `block_source()` already distinguishes, since a short surface
-block and a long main block see different interference. Add the parameters to
+`BlockMetrics.line_power` carries each block's accumulator to
+`_save_line_outputs`, which pools and then frees them; the `lines` table keeps
+the per-block provenance that `block_source()` distinguishes. Add the parameters to
 `_save_method_metadata` and bump its `"version"` past `"1.1"`.
 
 ### GUI side
@@ -240,30 +261,43 @@ model for every step — copy its shape rather than inventing one.
    in `_attach_optional_shank_arrays` and put the parsed dict on the data under
    its own key.
 2. **Build payloads.** Add `plotting/builders/line_amplitude.py` modelled on
-   `LfpSpectrumPlotDataBuilder`: a `build(in_brain_depths_um)` returning the
-   probe payload mapping, and a `probe_keys()` that reports the available line
-   keys cheaply without building anything. Emit dB, one probe strip per line,
-   labelled by frequency. Use `array_utils.safe_take` to go from channel-table
+   `LfpSpectrumPlotDataBuilder`, with a `line_keys()` that reports the lines
+   cheaply without building anything. Two payloads, both in dB relative to each
+   line's median within each block, so block offsets do not show as seams: an
+   image of every line (one column per line by frequency, split by shank
+   column) and one line's depth profile with its fitted curve. Use `array_utils.safe_take` to go from channel-table
    rows to the selected shank, `probe_bank_layout.arrange_channels_to_banks` for
    the image, and `level_policy.probe_colour_levels(..., channel_depths_um=,
    in_brain_depths_um=)` for scaling — the payload keys are `img`, `scale`,
    `offset`, `levels`, `cmap`, `xaxis`, `xrange`, `title`.
 3. **Memoize.** Construct the builder in `PlotDataPayloadCache.__init__`
    (`plotting/payload_cache.py`) alongside `self.lfp_spectrum_builder`, and
-   expose `get_line_amplitude_data` and `get_line_amplitude_probe_keys`.
-4. **Register.** In `plotting/registry.py`, add a `DynamicPlotSpec(key=
-   "probe.line_amplitude", menu="probe", children=...)` whose children come from
-   `_mapping_child_specs_from_keys`, exactly as `_probe_lfp_children` builds
-   `probe.lfp_spectrum`. Wrap the source in `_memoized_payload`. Availability is
+   expose `get_line_amplitude_data` and `get_line_amplitude_keys`.
+4. **Register.** In `plotting/registry.py`, add a `PlotSpec(key=
+   "image.line_amplitude")` for the all-lines image and a `DynamicPlotSpec(key=
+   "line.line_amplitude", menu="line", children=...)` with one child per line,
+   built by `_mapping_child_specs_from_keys` as `_probe_lfp_children` builds
+   `probe.lfp_spectrum`. No new plot area: both use the existing image and line
+   slots. Clicking a column of the image selects that line's child. Wrap the source in `_memoized_payload`. Availability is
    `_data_exists("line_amp")`; the dynamic parent contributes no menu entries
-   when `probe_keys()` is empty, so a line-free probe simply shows nothing.
+   when `line_keys()` is empty, so a line-free probe simply shows nothing.
    `plotting/menu_state.py` and `desktop/shell/menu_setup.py` then need no
    per-metric change.
-5. **Candidate markers.** Draw each candidate on the ephys depth panels as a
-   horizontal line at `midpoint_um` with a band for `width_um`, labelled with
-   method, agreeing lines and `delta_bic`, driven solid and lines dashed.
-   Selecting one shows its per-line steps and widths, ideally with each line's
-   profile and fitted logistic. Nothing is drawn when `candidates` is empty.
+5. **Candidate markers**, only on the two line-amplitude plots, never on
+   standard plots such as RMS AP or on histology. They must not read as
+   reference lines, which are full-width, draggable, 2 px lines in a random
+   palette colour and dash: a candidate is a shape, never a line across the
+   plot — a wedge at the plot's right edge at `midpoint_um` with a bar over
+   `width_um`, and on the line plot a hollow diamond on the fitted curve with
+   the transition's extent of the curve highlighted — in one fixed colour
+   outside the reference-line palette, with no hover or drag. Nothing is drawn
+   when `candidates` is empty.
+6. **Surface-candidates dock.** A `QDockWidget` listing the active shank's
+   candidates (midpoint, method, agreeing lines, `delta_bic`, width) and the
+   selected one's per-line steps, widths and agreement; selecting a line shows
+   it in the line plot. Opened from View. This is the GUI's first dock; build
+   the dock mechanism under `desktop/docks/` as a general feature rather than
+   for this one use.
 
 The alignment payoff is the candidates, not the probe plots. The GUI's present
 notion of "in brain" comes from the alignment; these come from the recording,
@@ -273,14 +307,20 @@ call, and a driven-tone candidate is a far stronger prior than a `lines` one
 near its gate.
 
 Decided: the band is 300 Hz–15 kHz and only the accepted lines are stored; a
-driven tone is declared, not inferred from the spectrum; candidates are
-per-block; no LF/HF fallback is emitted, since it lands about 300 um too
-shallow.
+driven tone is declared, not inferred from the spectrum; lines are detected and
+transitions fitted across blocks, with per-block baselines; no LF/HF fallback
+is emitted, since it lands about 300 um too shallow.
 
 Open questions:
 
 - The `min_delta_bic` gate, and whether the upper of two candidates is
   typically the bath surface, need insertion depths to settle.
+- `n_lines` (8). On 16 surveyed shanks, pooling reproduces every
+  lines-based reference call to within 30 um at 8 or 32 lines, in 0.2–8 s per
+  shank at 8. At 32, streams with many lines hit the cap, ΔBIC grows with the
+  agreeing lines (841303 probe 46121: 3,269 → 11,622), and a few near-gate
+  extras appear (860903 probe 50213 at 352 um, ΔBIC 565), so the choice is
+  tied to the gate.
 
 Acceptance criteria:
 

@@ -410,7 +410,7 @@ def _compute_all_metrics(  # noqa: C901
         psd_power=psd_power * uV_to_V**2,  # PSD is power (V²/Hz)
         psd_freqs=psd_freqs,
         shank_channels=shank_channels,
-        lines=lines.finalize(),
+        line_power=lines,
     )
 
 

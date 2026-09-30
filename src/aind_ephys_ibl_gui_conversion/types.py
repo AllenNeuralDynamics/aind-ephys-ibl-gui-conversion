@@ -10,7 +10,7 @@ import numpy as np
 import spikeinterface as si
 
 if TYPE_CHECKING:
-    from aind_ephys_ibl_gui_conversion.lines import BlockLines
+    from aind_ephys_ibl_gui_conversion.lines import LineAccumulator
 
 
 @dataclass
@@ -93,4 +93,6 @@ class BlockMetrics:
     psd_power: np.ndarray  # (n_lfp_freqs, n_channels)
     psd_freqs: np.ndarray  # (n_lfp_freqs,)
     shank_channels: list[ShankChannels]  # per-shank channel info
-    lines: BlockLines | None = None  # unreferenced interference lines
+    # Unreferenced power for interference lines, pooled over blocks when
+    # saved.
+    line_power: LineAccumulator | None = None

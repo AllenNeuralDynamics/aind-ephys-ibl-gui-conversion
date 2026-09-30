@@ -178,23 +178,21 @@ class LineAccumulator:
             )
         self.n_windows += 1
 
-    def finalize(self) -> BlockLines:
-        """Find the strongest lines and measure each on every channel."""
-        p = self.params
-        n_channels = self.power.shape[1]
-        empty = BlockLines(
-            freqs_hz=np.zeros(0),
-            amps_v=np.zeros((0, n_channels), dtype=np.float32),
-            excess_db=np.zeros(0),
-            n_windows=self.n_windows,
-            window_s=self.n_samples / self.fs,
-        )
+    def _ring(self) -> tuple[int, int]:
+        """Inner and outer background half-widths in bins."""
         df = self.fs / self.n_samples
-        inner = max(1, round(p.background_hz[0] / df))
-        outer = max(inner + 1, round(p.background_hz[1] / df))
-        if self.n_windows == 0 or self.freqs.size <= 2 * outer:
-            return empty
+        inner = max(1, round(self.params.background_hz[0] / df))
+        outer = max(inner + 1, round(self.params.background_hz[1] / df))
+        return inner, outer
 
+    def excess_spectrum(self) -> np.ndarray | None:
+        """Across-channel median of each bin's power over its background
+        ring, ``NaN`` where the ring runs off the band; ``None`` without
+        data."""
+        inner, outer = self._ring()
+        if self.n_windows == 0 or self.freqs.size <= 2 * outer:
+            return None
+        n_channels = self.power.shape[1]
         ratios = np.empty_like(self.power)
         for start in range(0, n_channels, self.channel_chunk):
             cols = slice(start, start + self.channel_chunk)
@@ -202,26 +200,75 @@ class LineAccumulator:
             with np.errstate(divide="ignore", invalid="ignore"):
                 ratios[:, cols] = chunk / _ring_mean(chunk, inner, outer)
         excess = np.nanmedian(ratios, axis=1)
-        excess[:outer] = excess[-outer:] = np.nan  # ring runs off the band
+        excess[:outer] = excess[-outer:] = np.nan
+        return excess
 
-        peaks = candidate_bins(np.nan_to_num(excess, nan=0.0), inner)
-        peaks = peaks[excess[peaks] >= 10 ** (p.min_excess_db / 10)]
-        if peaks.size == 0:
-            return empty
-        peaks = np.sort(peaks[np.argsort(-excess[peaks])][: p.n_lines])
-
+    def measure(
+        self, bins: np.ndarray, excess: np.ndarray | None
+    ) -> BlockLines:
+        """Each line at *bins* measured on every channel; *excess* is this
+        block's excess spectrum."""
+        inner, _ = self._ring()
+        n_channels = self.power.shape[1]
         norm_v2 = 2.0 / (self.n_samples * float(np.sum(self.hann**2)))
-        amps = np.empty((peaks.size, n_channels), dtype=np.float32)
-        for i, b in enumerate(peaks):
+        amps = np.empty((bins.size, n_channels), dtype=np.float32)
+        for i, b in enumerate(bins):
             lobe = self.power[b - inner : b + inner + 1] / self.n_windows
             amps[i] = np.sqrt(norm_v2 * lobe.sum(axis=0, dtype=np.float64))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            excess_db = (
+                10.0 * np.log10(excess[bins])
+                if excess is not None
+                else np.full(bins.size, np.nan)
+            )
         return BlockLines(
-            freqs_hz=self.freqs[peaks].astype(np.float64),
+            freqs_hz=self.freqs[bins].astype(np.float64),
             amps_v=amps * np.float32(1e-6),
-            excess_db=10.0 * np.log10(excess[peaks]),
+            excess_db=excess_db,
             n_windows=self.n_windows,
             window_s=self.n_samples / self.fs,
         )
+
+    def finalize(self) -> BlockLines:
+        """Find this block's strongest lines and measure each on every
+        channel."""
+        found = pool_lines([self], self.params)[0]
+        assert found is not None
+        return found
+
+
+def pool_lines(
+    accumulators: list[LineAccumulator | None], params: LineParams
+) -> list[BlockLines | None]:
+    """Lines found across blocks and measured in every block.
+
+    A line counts when it stands out in any block, by the largest of the
+    blocks' excess spectra, so each block's amplitude profile covers the
+    same lines whether or not that block sees them. Blocks on different
+    frequency grids are pooled separately.
+    """
+    out: list[BlockLines | None] = [None] * len(accumulators)
+    groups: dict[tuple[int, float], list[int]] = {}
+    for i, acc in enumerate(accumulators):
+        if acc is not None:
+            groups.setdefault((acc.n_samples, acc.fs), []).append(i)
+    for members in groups.values():
+        accs = [accumulators[i] for i in members]
+        spectra = [acc.excess_spectrum() for acc in accs]  # type: ignore[union-attr]
+        live = [e for e in spectra if e is not None]
+        bins = np.zeros(0, dtype=np.intp)
+        if live:
+            with np.errstate(invalid="ignore"):
+                pooled = np.fmax.reduce(live)
+            inner, _ = accs[0]._ring()  # type: ignore[union-attr]
+            peaks = candidate_bins(np.nan_to_num(pooled, nan=0.0), inner)
+            peaks = peaks[pooled[peaks] >= 10 ** (params.min_excess_db / 10)]
+            bins = np.sort(peaks[np.argsort(-pooled[peaks])][: params.n_lines])
+        for i, acc, excess in zip(members, accs, spectra, strict=True):
+            out[i] = acc.measure(  # type: ignore[union-attr]
+                bins if excess is not None else bins[:0], excess
+            )
+    return out
 
 
 def _ring_mean(power: np.ndarray, inner: int, outer: int) -> np.ndarray:
@@ -280,15 +327,28 @@ def _robust_sd(x: np.ndarray) -> np.ndarray:
     return _MAD_TO_SD * np.median(np.abs(x - median), axis=-1)
 
 
-def _replace_outliers(db: np.ndarray, params: LineParams) -> np.ndarray:
-    """Each line's outlying channels replaced by its running median."""
+def _segments(blocks: np.ndarray) -> list[slice]:
+    """Runs of equal *blocks*, which is sorted."""
+    edges = np.flatnonzero(np.diff(blocks)) + 1
+    bounds = np.r_[0, edges, blocks.size]
+    return [slice(a, b) for a, b in zip(bounds[:-1], bounds[1:], strict=True)]
+
+
+def _replace_outliers(
+    db: np.ndarray, segments: list[slice], params: LineParams
+) -> np.ndarray:
+    """Each line's outlying channels replaced by its running median, both
+    taken within each block so neither an offset nor a noisier block
+    counts against another."""
     width = params.outlier_window | 1
-    running = median_filter(db, size=(1, width), mode="nearest")
-    resid = db - running
-    sd = np.maximum(_robust_sd(resid), 1e-6)
-    return np.where(
-        np.abs(resid) > params.outlier_z * sd[:, None], running, db
-    )
+    out = db.copy()
+    for seg in segments:
+        running = median_filter(db[:, seg], size=(1, width), mode="nearest")
+        resid = db[:, seg] - running
+        sd = np.maximum(_robust_sd(resid), 1e-6)
+        outlying = np.abs(resid) > params.outlier_z * sd[:, None]
+        out[:, seg] = np.where(outlying, running, db[:, seg])
+    return out
 
 
 def _logistic(
@@ -303,13 +363,35 @@ def _logistic(
     return np.where(scale > 0, smooth, (d > 0).astype(float))
 
 
-def _nuisance_basis(y: np.ndarray, fixed: np.ndarray) -> np.ndarray:
-    """``(n_lines, n, k)`` orthonormal basis of each line's baseline,
-    trend and *fixed* ``(n_lines, n, j)`` transition columns."""
-    n_lines, n = fixed.shape[:2]
-    trend = (y - y.mean()) / (np.ptp(y) or 1.0)
-    base = np.broadcast_to(np.stack([np.ones(n), trend], -1), (n_lines, n, 2))
-    return np.linalg.qr(np.concatenate([base, fixed], -1))[0]
+@dataclass
+class _Profile:
+    """Depth-sorted channels of one shank pooled over blocks."""
+
+    y: np.ndarray  # (n,) um from the tip
+    blocks: np.ndarray  # (n,) block of each channel, sorted
+    segments: list[slice]
+    base: np.ndarray  # (n, n_blocks + 1) block baselines and shared trend
+
+    @classmethod
+    def build(cls, y: np.ndarray, blocks: np.ndarray) -> _Profile:
+        """Profile of channels already sorted by block."""
+        levels = np.unique(blocks)
+        indicators = (blocks[:, None] == levels[None, :]).astype(float)
+        trend = (y - y.mean()) / (np.ptp(y) or 1.0)
+        return cls(
+            y, blocks, _segments(blocks), np.c_[indicators, trend[:, None]]
+        )
+
+
+def _nuisance_basis(
+    profile: _Profile, fixed: np.ndarray, scale: np.ndarray
+) -> np.ndarray:
+    """``(n_lines, n, k)`` orthonormal basis of each line's whitened block
+    baselines, trend and *fixed* ``(n_lines, n, j)`` transition columns;
+    *scale* ``(n_lines, n)`` whitens each channel."""
+    base = np.broadcast_to(profile.base, (fixed.shape[0], *profile.base.shape))
+    columns = np.concatenate([base, fixed], -1)
+    return np.linalg.qr(columns * scale[..., None])[0]
 
 
 def _residualize(x: np.ndarray, basis: np.ndarray) -> np.ndarray:
@@ -345,41 +427,54 @@ def _columns(y: np.ndarray, n_lines: int, fixed: list[_Transition]):
 
 def _scan(
     db: np.ndarray,
-    y: np.ndarray,
+    profile: _Profile,
     fixed: list[_Transition],
     centres: np.ndarray,
-    weight: np.ndarray,
+    noise: _Noise,
     params: LineParams,
 ) -> tuple[np.ndarray, np.ndarray, _Transition | None, np.ndarray]:
     """Add one transition at each candidate centre on top of *fixed*.
 
-    Returns the weighted gain summed over lines per centre, each line's
-    gain at the best centre, that transition, and each line's step there.
+    Returns the whitened gain summed over lines per centre; each line's
+    gain at the best centre; that transition; and each
+    line's step there in dB.
     """
-    n_lines = db.shape[0]
-    basis = _nuisance_basis(y, _columns(y, n_lines, fixed))
-    resid = _residualize(db, basis)
+    n_lines, n = db.shape
+    y = profile.y
+    scale = noise.scale
+    basis = _nuisance_basis(profile, _columns(y, n_lines, fixed), scale)
+    resid = _residualize(db * scale, basis)
+    # A candidate column c enters only through inner products with each
+    # line's whitened residual, whitened basis and whitening, so every
+    # centre is scanned by three matrix products instead of residualizing
+    # an (n_centres, n_lines, n) array. The column depends on depth alone,
+    # so channels sharing a depth are summed first.
+    k = basis.shape[-1]
+    depths, at_depth = np.unique(y, return_inverse=True)
+    to_depth = np.zeros((depths.size, n))
+    to_depth[at_depth, np.arange(n)] = 1.0
+    against_resid = to_depth @ (scale * resid).T  # (n_depths, n_lines)
+    against_basis = to_depth @ (scale[..., None] * basis).transpose(
+        1, 0, 2
+    ).reshape(n, n_lines * k)
+    against_self = to_depth @ (scale**2).T
     best = np.full((centres.size, n_lines), -np.inf)
     below = np.zeros_like(best)
     above = np.zeros_like(best)
     step = np.zeros_like(best)
     for b in params.widths_um:
         for a in params.widths_um:
-            col = _residualize(
-                np.broadcast_to(
-                    _logistic(y, centres, b, a)[:, None, :],
-                    (centres.size, n_lines, y.size),
-                ),
-                basis,
-            )
-            norm = np.maximum(np.einsum("mln,mln->ml", col, col), 1e-12)
-            proj = np.einsum("mln,ln->ml", col, resid)
+            c = _logistic(depths, centres, b, a)  # (n_centres, n_depths)
+            proj = c @ against_resid
+            on_basis = (c @ against_basis).reshape(-1, n_lines, k)
+            norm = (c**2) @ against_self - np.sum(on_basis**2, -1)
+            norm = np.maximum(norm, 1e-12)
             gain = proj**2 / norm
             better = gain > best
             best[better] = gain[better]
             below[better], above[better] = b, a
             step[better] = (proj / norm)[better]
-    score = best @ weight
+    score = best.sum(-1)
     if not centres.size:
         return score, np.zeros(n_lines), None, np.zeros(n_lines)
     k = int(np.argmax(score))
@@ -391,20 +486,55 @@ def _scan(
     )
 
 
-def _line_weights(
-    db: np.ndarray, y: np.ndarray, fixed: list[_Transition]
-) -> tuple[np.ndarray, float]:
-    """Per-line inverse residual variance deflated for correlation between
-    neighbouring channels, and the mean effective channel count."""
-    basis = _nuisance_basis(y, _columns(y, db.shape[0], fixed))
-    resid = _residualize(db, basis)
-    sd = np.maximum(_robust_sd(resid), 1e-3)
-    centred = resid - resid.mean(-1, keepdims=True)
-    lag1 = np.sum(centred[:, 1:] * centred[:, :-1], -1) / np.maximum(
-        np.sum(centred**2, -1), 1e-12
-    )
-    deflate = (1 - np.clip(lag1, 0, 0.99)) / (1 + np.clip(lag1, 0, 0.99))
-    return deflate / sd**2, float(y.size * deflate.mean())
+@dataclass
+class _Noise:
+    """Per-channel whitening, deflated per line and block for correlation
+    between neighbouring channels."""
+
+    scale: np.ndarray  # (n_lines, n)
+    n_eff: float
+
+    @classmethod
+    def from_neighbours(cls, db: np.ndarray, profile: _Profile) -> _Noise:
+        """Channel-to-channel noise per line and block; residuals of a fit
+        without a transition would inflate it for exactly the lines that
+        have one."""
+        scale = np.empty_like(db)
+        for seg in profile.segments:
+            sd = _robust_sd(np.diff(db[:, seg], axis=1)) / np.sqrt(2.0)
+            scale[:, seg] = (1.0 / np.maximum(sd, 1e-3))[:, None]
+        return cls(scale, float(profile.y.size))
+
+    @classmethod
+    def from_fit(
+        cls,
+        db: np.ndarray,
+        profile: _Profile,
+        fixed: list[_Transition],
+        previous: _Noise,
+    ) -> _Noise:
+        """Residual sd per line and block given *fixed*, each block's
+        weight deflated by its own lag-1 correlation so one correlated block
+        does not discount the others."""
+        basis = _nuisance_basis(
+            profile, _columns(profile.y, db.shape[0], fixed), previous.scale
+        )
+        resid = _residualize(db * previous.scale, basis) / previous.scale
+        scale = np.empty_like(db)
+        n_eff = 0.0
+        for seg in profile.segments:
+            white = resid[:, seg]
+            sd = np.maximum(_robust_sd(white), 1e-3)
+            white = white / sd[:, None]
+            white -= white.mean(-1, keepdims=True)
+            lag1 = np.sum(white[:, 1:] * white[:, :-1], -1) / np.maximum(
+                np.sum(white**2, -1), 1e-12
+            )
+            rho = np.clip(lag1, 0, 0.99)
+            deflate = (1 - rho) / (1 + rho)
+            scale[:, seg] = (np.sqrt(deflate) / sd)[:, None]
+            n_eff += white.shape[1] * float(deflate.mean())
+        return cls(scale, n_eff)
 
 
 def _admissible(
@@ -418,58 +548,87 @@ def _admissible(
 
 
 def _fit(
-    db: np.ndarray, y: np.ndarray, centres: np.ndarray, n: int, params
-) -> tuple[list[_Transition], np.ndarray]:
+    db: np.ndarray,
+    profile: _Profile,
+    centres: np.ndarray,
+    n: int,
+    params: LineParams,
+) -> tuple[list[_Transition], _Noise]:
     """*n* transitions placed greedily, then each re-placed given the rest."""
     fixed: list[_Transition] = []
-    # Channel-to-channel noise: residuals of a fit without the transition
-    # would down-weight exactly the lines that have one.
-    weight = 2.0 / np.maximum(_robust_sd(np.diff(db, axis=1)), 1e-3) ** 2
+    noise = _Noise.from_neighbours(db, profile)
     for _ in range(n):
         free = _admissible(centres, fixed, params)
         if not free.size:
             break
-        fixed.append(_scan(db, y, fixed, free, weight, params)[2])
+        fixed.append(_scan(db, profile, fixed, free, noise, params)[2])
         for _ in range(2):
             for i in range(len(fixed)):
                 others = fixed[:i] + fixed[i + 1 :]
                 free = _admissible(centres, others, params)
-                fixed[i] = _scan(db, y, others, free, weight, params)[2]
-            weight, _ = _line_weights(db, y, fixed)
-    return fixed, weight
+                fixed[i] = _scan(db, profile, others, free, noise, params)[2]
+            noise = _Noise.from_fit(db, profile, fixed, noise)
+    return fixed, noise
+
+
+def _coefficients(
+    db: np.ndarray, profile: _Profile, model: list[_Transition], noise: _Noise
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Each line's block baselines at the tip (dB), trend (dB per mm) and
+    steps (dB) with every transition in *model* fitted jointly."""
+    n_blocks = profile.base.shape[1] - 1
+    cols = _columns(profile.y, db.shape[0], model)
+    baselines = np.empty((db.shape[0], n_blocks))
+    trend = np.empty(db.shape[0])
+    steps = np.empty((db.shape[0], len(model)))
+    for line in range(db.shape[0]):
+        design = np.c_[
+            profile.base[:, :n_blocks], profile.y / 1000.0, cols[line]
+        ]
+        w = noise.scale[line]
+        coef = np.linalg.lstsq(design * w[:, None], db[line] * w, rcond=None)[
+            0
+        ]
+        baselines[line] = coef[:n_blocks]
+        trend[line] = coef[n_blocks]
+        steps[line] = coef[n_blocks + 1 :]
+    return baselines, trend, steps
 
 
 def _describe(
     db: np.ndarray,
-    y: np.ndarray,
+    profile: _Profile,
     centres: np.ndarray,
     model: list[_Transition],
+    noise: _Noise,
     params: LineParams,
 ) -> list[dict]:
     """Each transition's support given the others, and whether it passes.
 
     A line supports a transition when adding it, with its own step and two
-    widths, beats a BIC penalty. The transition passes when its summed
-    support exceeds the penalty for every line plus the shared location by
-    ``min_delta_bic`` and ``min_agreeing_lines`` lines support it
-    individually.
+    widths, beats a BIC penalty. ``delta_bic`` sums what the supporting
+    lines gain beyond that penalty, less the shared location's, so lines
+    that do not step cost nothing and the gate does not tighten with the
+    number of lines. The transition passes on ``min_delta_bic`` with
+    ``min_agreeing_lines`` supporting lines.
     """
-    weight, n_eff = _line_weights(db, y, model)
+    n_eff = noise.n_eff
     # A step and two widths, the widths also picked from a grid.
     line_penalty = 3 * np.log(max(n_eff, 2.0)) + 2 * np.log(
         len(params.widths_um)
     )
+    baselines, trend, steps = _coefficients(db, profile, model, noise)
+    blocks = np.unique(profile.blocks)
     out = []
     for i, t in enumerate(model):
         others = model[:i] + model[i + 1 :]
         free = _admissible(centres, others, params)
-        score, gain, _, _ = _scan(db, y, others, free, weight, params)
-        own = _scan(db, y, others, np.array([t.centre]), weight, params)
-        support = own[1] * weight
-        steps = own[3]
-        delta_bic = float(support.sum() - (db.shape[0] * line_penalty))
-        delta_bic -= float(np.log(max(n_eff, 2.0)))
+        score, _, _, _ = _scan(db, profile, others, free, noise, params)
+        own = _scan(db, profile, others, np.array([t.centre]), noise, params)
+        support = own[1]
         agrees = support > line_penalty
+        delta_bic = float(np.sum(support[agrees] - line_penalty))
+        delta_bic -= float(np.log(max(n_eff, 2.0)))
         near = free[score >= score.max() - 3.84] if free.size else free
         spread = np.log(9.0) * (t.below_um + t.above_um)
         out.append(
@@ -491,11 +650,18 @@ def _describe(
                 "lines": [
                     {
                         "row": int(row),
-                        "step_db": float(steps[row]),
+                        "step_db": float(steps[row, i]),
                         "width_below_um": float(t.below_um[row]),
                         "width_above_um": float(t.above_um[row]),
                         "support": float(support[row]),
                         "agrees": bool(agrees[row]),
+                        "baseline_db": {
+                            int(b): float(v)
+                            for b, v in zip(
+                                blocks, baselines[row], strict=True
+                            )
+                        },
+                        "trend_db_per_mm": float(trend[row]),
                     }
                     for row in range(db.shape[0])
                 ],
@@ -504,10 +670,26 @@ def _describe(
     return out
 
 
+def _identifiable_centres(
+    y: np.ndarray, profile: _Profile, min_side: int
+) -> np.ndarray:
+    """Midpoints between depths with ``min_side`` channels of one block on
+    each side. A transition no block straddles is a block offset, so a
+    boundary between blocks that tile the shank is never a candidate."""
+    depths = np.unique(y)
+    mids = (depths[:-1] + depths[1:]) / 2
+    ok = np.zeros(mids.size, dtype=bool)
+    for seg in profile.segments:
+        above = (y[seg][None, :] > mids[:, None]).sum(1)
+        ok |= (above >= min_side) & (y[seg].size - above >= min_side)
+    return mids[ok]
+
+
 def fit_transitions(
     amps_v: np.ndarray,
     locations_um: np.ndarray,
     params: LineParams,
+    blocks: np.ndarray | None = None,
     max_transitions: int | None = None,
     min_agreeing_lines: int | None = None,
 ) -> list[dict]:
@@ -518,6 +700,10 @@ def fit_transitions(
     Which candidate is the brain surface is left to the reader: a second
     boundary, such as the bath surface, can be as strong.
 
+    Channels may come from several blocks. A line's level drifts between
+    recordings by several dB, so each line has its own baseline per block;
+    its trend, steps and widths are shared.
+
     Parameters
     ----------
     amps_v : np.ndarray
@@ -526,6 +712,8 @@ def fit_transitions(
         ``(n_channels, 2)`` probe-local ``(x, y)``, ``y`` up from the tip.
     params : LineParams
         Fit settings.
+    blocks : np.ndarray or None
+        ``(n_channels,)`` block of each channel; one block when ``None``.
     max_transitions, min_agreeing_lines : int or None
         Overrides of the ``params`` values.
 
@@ -534,10 +722,12 @@ def fit_transitions(
     list[dict]
         Per transition, deepest first: ``midpoint_um``; ``width_um``, the
         median 10-90 % extent over agreeing lines; ``interval_um``, the
-        midpoints within 3.84 of the best weighted fit; ``delta_bic``;
+        midpoints within 3.84 of the best whitened fit; ``delta_bic``;
         ``n_agreeing_lines``; ``n_lines``; and per line ``row``,
         ``step_db`` (shallow minus deep), ``width_below_um``,
-        ``width_above_um`` (logistic scales), ``support`` and ``agrees``.
+        ``width_above_um`` (logistic scales), ``support``, ``agrees``, and
+        the joint fit's ``baseline_db`` per block at the tip and
+        ``trend_db_per_mm``.
     """
     if min_agreeing_lines is not None or max_transitions is not None:
         params = replace(
@@ -548,24 +738,22 @@ def fit_transitions(
     n_lines, n = amps_v.shape
     if n_lines == 0 or n < 2 * params.min_side:
         return []
-    order = np.lexsort((locations_um[:, 0], -locations_um[:, 1]))
+    if blocks is None:
+        blocks = np.zeros(n, dtype=int)
+    order = np.lexsort((locations_um[:, 0], -locations_um[:, 1], blocks))
     y = locations_um[order, 1].astype(float)
+    profile = _Profile.build(y, np.asarray(blocks)[order])
     db = 20.0 * np.log10(np.maximum(amps_v[:, order], 1e-30))
-    db = _replace_outliers(db.astype(float), params)
-    depths = np.unique(y)
-    mids = (depths[:-1] + depths[1:]) / 2
-    n_above = (y[None, :] > mids[:, None]).sum(1)
-    centres = mids[
-        (n_above >= params.min_side) & (n - n_above >= params.min_side)
-    ]
+    db = _replace_outliers(db.astype(float), profile.segments, params)
+    centres = _identifiable_centres(y, profile, params.min_side)
     if not centres.size:
         return []
 
     for n_transitions in range(params.max_transitions, 0, -1):
-        model, _ = _fit(db, y, centres, n_transitions, params)
+        model, noise = _fit(db, profile, centres, n_transitions, params)
         if len(model) < n_transitions:
             continue
-        found = _describe(db, y, centres, model, params)
+        found = _describe(db, profile, centres, model, noise, params)
         if all(t["passes"] for t in found):
             return sorted(found, key=lambda t: t["midpoint_um"])
     return []

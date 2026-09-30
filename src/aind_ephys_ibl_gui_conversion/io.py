@@ -15,8 +15,10 @@ from aind_ephys_ibl_gui_conversion.channel_metadata import (
     build_channel_table,
 )
 from aind_ephys_ibl_gui_conversion.lines import (
+    BlockLines,
     LineParams,
     fit_transitions,
+    pool_lines,
     usable_channels,
 )
 from aind_ephys_ibl_gui_conversion.metrics import (
@@ -390,6 +392,58 @@ def _save_spectral_outputs(
             json.dump({"blocks": channel_blocks}, f, indent=2)
 
 
+def _line_groups(found: list[BlockLines | None]) -> list[list[int]]:
+    """Blocks measured at the same lines, which are fitted together."""
+    groups: list[list[int]] = []
+    for i, block_lines in enumerate(found):
+        if block_lines is None:
+            continue
+        for group in groups:
+            ref = found[group[0]]
+            assert ref is not None
+            if np.array_equal(ref.freqs_hz, block_lines.freqs_hz):
+                group.append(i)
+                break
+        else:
+            groups.append([i])
+    return groups
+
+
+def _shank_profile(
+    results: list[BlockMetrics],
+    block_maps: list[np.ndarray],
+    found: list[BlockLines | None],
+    group: list[int],
+    channel_table,
+    shank: int,
+    line_params: LineParams,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """Usable channels of *shank* over the blocks in *group*: line
+    amplitudes, probe-local locations and block of each channel."""
+    amps, locations, blocks = [], [], []
+    for block_idx in group:
+        block_lines = found[block_idx]
+        assert block_lines is not None
+        rows = block_maps[block_idx][: block_lines.amps_v.shape[1]]
+        on_shank = np.flatnonzero(channel_table.shank_ind[rows] == shank)
+        if not on_shank.size:
+            continue
+        rms_ap = np.sqrt(
+            np.mean(np.square(results[block_idx].rms_ap[:, on_shank]), axis=0)
+        )
+        keep = on_shank[usable_channels(rms_ap, line_params)]
+        amps.append(block_lines.amps_v[:, keep])
+        locations.append(channel_table.local_coordinates[rows[keep]])
+        blocks.append(np.full(keep.size, block_idx))
+    if not amps or not block_lines.freqs_hz.size:
+        return None
+    return (
+        np.concatenate(amps, axis=1),
+        np.concatenate(locations),
+        np.concatenate(blocks),
+    )
+
+
 def _save_line_outputs(
     output_folder: Path,
     results: list[BlockMetrics],
@@ -398,13 +452,14 @@ def _save_line_outputs(
 ) -> None:
     """Save interference-line amplitudes and brain-surface candidates.
 
-    Each amplitude row is one line measured in one block, ``NaN`` on rows
-    that block did not record. Blocks see different interference, so rows
-    are never stitched across blocks; each block fits transitions on the
-    shanks it recorded, and every passing one is kept as a candidate on its
-    shank. None is chosen as the surface. ``brain_surface.json`` ``lines``
-    is aligned with the amplitude rows, and candidate ``row`` values index
-    them.
+    Lines are found across all blocks and measured in each, so every block
+    reports the same lines. Each amplitude row is one line in one block,
+    ``NaN`` on rows that block did not record; rows are not stitched across
+    blocks because a line's level drifts between recordings. Each shank is
+    fitted once over every block that recorded it, with a baseline per
+    block, and every passing transition is kept as a candidate. None is
+    chosen as the surface. ``brain_surface.json`` ``lines`` is aligned with
+    the amplitude rows. Frees each block's line power.
 
     Parameters
     ----------
@@ -415,73 +470,93 @@ def _save_line_outputs(
     line_params : LineParams
         Fit settings.
     driven_tone_hz : float or None
-        Frequency of a tone driven into the animal. The detected line within
+        Frequency of a tone driven into the animal. The line within
         ``line_params.background_hz[0]`` of it is also fitted alone and its
         transition kept as a ``driven`` candidate.
     """
-    if all(r.lines is None for r in results):
+    if all(r.line_power is None for r in results):
         return
+    found = pool_lines([r.line_power for r in results], line_params)
+    for r in results:
+        r.line_power = None
     channel_table, block_maps, n_rows = _build_channel_maps(results)
     amps: list[np.ndarray] = []
     lines: list[dict] = []
-    candidates: dict[int, list[dict]] = {}
-    for block_idx, (r, row_map) in enumerate(
-        zip(results, block_maps, strict=True)
+    # Amplitude row of each block's first line.
+    first_row: dict[int, int] = {}
+    for block_idx, (r, row_map, block_lines) in enumerate(
+        zip(results, block_maps, found, strict=True)
     ):
-        if r.lines is None:
+        if block_lines is None:
             continue
-        found = r.lines
-        first_row = len(lines)
-        label = block_source(r.block)
-        amps.append(_on_channel_table_rows(found.amps_v, row_map, n_rows))
+        first_row[block_idx] = len(lines)
+        amps.append(
+            _on_channel_table_rows(block_lines.amps_v, row_map, n_rows)
+        )
         lines.extend(
             {
                 "freq_hz": float(f),
+                "line_index": j,
                 "block_index": block_idx,
-                "label": label,
-                "excess_db": float(excess),
+                "label": block_source(r.block),
+                "excess_db": None if np.isnan(excess) else float(excess),
             }
-            for f, excess in zip(found.freqs_hz, found.excess_db, strict=True)
+            for j, (f, excess) in enumerate(
+                zip(block_lines.freqs_hz, block_lines.excess_db, strict=True)
+            )
         )
 
+    candidates: dict[int, list[dict]] = {}
+    for group in _line_groups(found):
+        freqs = found[group[0]].freqs_hz  # type: ignore[union-attr]
         driven = None
-        if driven_tone_hz is not None and found.freqs_hz.size:
-            j = int(np.argmin(np.abs(found.freqs_hz - driven_tone_hz)))
-            tolerance = line_params.background_hz[0]
-            if abs(found.freqs_hz[j] - driven_tone_hz) <= tolerance:
+        if driven_tone_hz is not None and freqs.size:
+            j = int(np.argmin(np.abs(freqs - driven_tone_hz)))
+            if abs(freqs[j] - driven_tone_hz) <= line_params.background_hz[0]:
                 driven = j
-
-        rows = row_map[: found.amps_v.shape[1]]
-        rms_ap = np.sqrt(np.mean(np.square(r.rms_ap), axis=0))
-        for shank in np.unique(channel_table.shank_ind[rows]):
-            on_shank = np.flatnonzero(channel_table.shank_ind[rows] == shank)
-            keep = on_shank[usable_channels(rms_ap[on_shank], line_params)]
-            locations = channel_table.local_coordinates[rows[keep]]
+        for shank in np.unique(channel_table.shank_ind):
+            pooled = _shank_profile(
+                results,
+                block_maps,
+                found,
+                group,
+                channel_table,
+                int(shank),
+                line_params,
+            )
+            if pooled is None:
+                continue
+            shank_amps, locations, blocks = pooled
             fits = [
-                ("lines", t, list(range(found.amps_v.shape[0])))
+                ("lines", t, np.arange(freqs.size))
                 for t in fit_transitions(
-                    found.amps_v[:, keep], locations, line_params
+                    shank_amps, locations, line_params, blocks=blocks
                 )
             ]
             if driven is not None:
                 fits += [
-                    ("driven", t, [driven])
+                    ("driven", t, np.array([driven]))
                     for t in fit_transitions(
-                        found.amps_v[[driven]][:, keep],
+                        shank_amps[[driven]],
                         locations,
                         line_params,
+                        blocks=blocks,
                         max_transitions=1,
                         min_agreeing_lines=1,
                     )
                 ]
-            for method, t, line_rows in fits:
+            block_indices = sorted({int(b) for b in blocks})
+            for method, t, line_indices in fits:
                 for line in t["lines"]:
-                    line["row"] = first_row + line_rows[line["row"]]
+                    j = int(line_indices[line.pop("row")])
+                    line["line_index"] = j
+                    line["freq_hz"] = float(freqs[j])
+                    line["amplitude_rows"] = {
+                        b: first_row[b] + j for b in block_indices
+                    }
                 del t["passes"]
                 candidates.setdefault(int(shank), []).append(
-                    {"method": method, "block_index": block_idx}
-                    | {"label": label}
-                    | t
+                    {"method": method, "block_indices": block_indices} | t
                 )
 
     shanks = {
