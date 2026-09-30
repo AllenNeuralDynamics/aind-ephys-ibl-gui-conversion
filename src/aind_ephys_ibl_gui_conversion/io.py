@@ -654,7 +654,7 @@ def _save_method_metadata(
         },
     }
     if line_params is not None:
-        metadata["metrics"]["line_amplitude"] = "common_mode_multitaper_f_test"
+        metadata["metrics"]["line_amplitude"] = "unreferenced_spectral_excess"
         # Lines are measured before the common-median reference.
         metadata["parameters"]["line_detection"] = {
             "window_s": rms_window_duration,
