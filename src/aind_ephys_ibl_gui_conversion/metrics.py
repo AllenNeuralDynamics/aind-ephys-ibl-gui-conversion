@@ -11,6 +11,7 @@ from aind_ephys_ibl_gui_conversion.channel_metadata import (
     depth_sorted_shank_rows,
     normalized_channel_groups,
 )
+from aind_ephys_ibl_gui_conversion.lines import LineAccumulator, LineParams
 from aind_ephys_ibl_gui_conversion.types import (
     BlockMetrics,
     ChannelTable,
@@ -146,6 +147,7 @@ def _compute_all_metrics(  # noqa: C901
     lfp_freq_range: tuple[float, float] = (1.0, 300.0),
     bands: dict[str, tuple[float, float]] | None = None,
     min_coherency_windows: int = 20,
+    line_params: LineParams | None = None,
 ) -> BlockMetrics:
     """Compute all ephys metrics from sparse windows.
 
@@ -176,6 +178,8 @@ def _compute_all_metrics(  # noqa: C901
         If set, limit windows to this duration (for combined RMS).
     min_coherency_windows : int
         Minimum number of windows for coherency estimation.
+    line_params : LineParams or None
+        Interference-line settings; defaults to ``LineParams()``.
     """
     recording = block.recording
     lfp_recording = block.lfp_recording
@@ -270,6 +274,12 @@ def _compute_all_metrics(  # noqa: C901
         for band_name in bands
     }
     psd_accum = np.zeros((n_lfp_psd_bins, n_lfp_channels), dtype=np.float64)
+    lines = LineAccumulator(
+        window_samples,
+        fs,
+        n_ap_channels,
+        line_params if line_params is not None else LineParams(),
+    )
 
     # --- Main loop: submit all reads, process as completed ---
     n_read_workers = min(8, n_windows)
@@ -324,17 +334,16 @@ def _compute_all_metrics(  # noqa: C901
                 # --- 1.0: separate AP and LFP recordings ---
                 X_ap = scipy.fft.rfft(raw[:ap_samples], axis=0)
                 rms_ap[i] = _parseval_rms(X_ap, ap_mask, ap_samples)
+                # Never common-median referenced.
+                lines.add_spectrum(raw)
                 lfp_raw = lfp_data.astype(np.float32)
             else:
                 # --- 2.0: wideband ---
                 lfp_raw = raw
 
             # Common-median reference + demean + Hann -> one FFT.
-            np.subtract(
-                lfp_raw,
-                np.median(lfp_raw, axis=1, keepdims=True),
-                out=lfp_raw,
-            )
+            reference = np.median(lfp_raw, axis=1, keepdims=True)
+            np.subtract(lfp_raw, reference, out=lfp_raw)
             lfp_seg = lfp_raw[: hann.shape[0]]
             np.subtract(lfp_seg, lfp_seg.mean(axis=0), out=lfp_seg)
             np.multiply(lfp_seg, hann[:, None], out=lfp_seg)
@@ -356,6 +365,11 @@ def _compute_all_metrics(  # noqa: C901
             for band_name, mask in band_masks.items():
                 X_band = X[mask]
                 Sij[band_name] += X_band.conj().T @ X_band
+
+            if lfp_recording is None:
+                # The reference cancels the lines, so it is added back over
+                # the line band; this is the last use of X.
+                lines.add_referenced_spectrum(X, reference[: hann.shape[0], 0])
 
     psd_power, psd_freqs, correlation, complex_coherency = (
         _normalize_spectral_estimates(
@@ -396,6 +410,7 @@ def _compute_all_metrics(  # noqa: C901
         psd_power=psd_power * uV_to_V**2,  # PSD is power (V²/Hz)
         psd_freqs=psd_freqs,
         shank_channels=shank_channels,
+        lines=lines.finalize(),
     )
 
 

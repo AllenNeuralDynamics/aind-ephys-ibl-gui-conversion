@@ -1,5 +1,6 @@
 """I/O helpers for loading recordings and saving ephys metrics."""
 
+import dataclasses
 import json
 import logging
 import re
@@ -13,12 +14,18 @@ import spikeinterface as si
 from aind_ephys_ibl_gui_conversion.channel_metadata import (
     build_channel_table,
 )
+from aind_ephys_ibl_gui_conversion.lines import (
+    LineParams,
+    fit_transitions,
+    usable_channels,
+)
 from aind_ephys_ibl_gui_conversion.metrics import (
     CoherenceBlockSource,
     _assemble_blockwise_coherence,
     _build_channel_maps,
     _build_row_channels_metadata,
     _compute_all_metrics,
+    block_source,
 )
 from aind_ephys_ibl_gui_conversion.recording_utils import (
     _stream_matches,
@@ -383,6 +390,134 @@ def _save_spectral_outputs(
             json.dump({"blocks": channel_blocks}, f, indent=2)
 
 
+def _save_line_outputs(
+    output_folder: Path,
+    results: list[BlockMetrics],
+    line_params: LineParams,
+    driven_tone_hz: float | None = None,
+) -> None:
+    """Save interference-line amplitudes and brain-surface candidates.
+
+    Each amplitude row is one line measured in one block, ``NaN`` on rows
+    that block did not record. Blocks see different interference, so rows
+    are never stitched across blocks; each block fits transitions on the
+    shanks it recorded, and every passing one is kept as a candidate on its
+    shank. None is chosen as the surface. ``brain_surface.json`` ``lines``
+    is aligned with the amplitude rows, and candidate ``row`` values index
+    them.
+
+    Parameters
+    ----------
+    output_folder : Path
+        Stream output folder.
+    results : list[BlockMetrics]
+        Blocks in ``_build_channel_maps`` order.
+    line_params : LineParams
+        Fit settings.
+    driven_tone_hz : float or None
+        Frequency of a tone driven into the animal. The detected line within
+        ``line_params.background_hz[0]`` of it is also fitted alone and its
+        transition kept as a ``driven`` candidate.
+    """
+    if all(r.lines is None for r in results):
+        return
+    channel_table, block_maps, n_rows = _build_channel_maps(results)
+    amps: list[np.ndarray] = []
+    lines: list[dict] = []
+    candidates: dict[int, list[dict]] = {}
+    for block_idx, (r, row_map) in enumerate(
+        zip(results, block_maps, strict=True)
+    ):
+        if r.lines is None:
+            continue
+        found = r.lines
+        first_row = len(lines)
+        label = block_source(r.block)
+        amps.append(_on_channel_table_rows(found.amps_v, row_map, n_rows))
+        lines.extend(
+            {
+                "freq_hz": float(f),
+                "block_index": block_idx,
+                "label": label,
+                "excess_db": float(excess),
+            }
+            for f, excess in zip(found.freqs_hz, found.excess_db, strict=True)
+        )
+
+        driven = None
+        if driven_tone_hz is not None and found.freqs_hz.size:
+            j = int(np.argmin(np.abs(found.freqs_hz - driven_tone_hz)))
+            tolerance = line_params.background_hz[0]
+            if abs(found.freqs_hz[j] - driven_tone_hz) <= tolerance:
+                driven = j
+
+        rows = row_map[: found.amps_v.shape[1]]
+        rms_ap = np.sqrt(np.mean(np.square(r.rms_ap), axis=0))
+        for shank in np.unique(channel_table.shank_ind[rows]):
+            on_shank = np.flatnonzero(channel_table.shank_ind[rows] == shank)
+            keep = on_shank[usable_channels(rms_ap[on_shank], line_params)]
+            locations = channel_table.local_coordinates[rows[keep]]
+            fits = [
+                ("lines", t, list(range(found.amps_v.shape[0])))
+                for t in fit_transitions(
+                    found.amps_v[:, keep], locations, line_params
+                )
+            ]
+            if driven is not None:
+                fits += [
+                    ("driven", t, [driven])
+                    for t in fit_transitions(
+                        found.amps_v[[driven]][:, keep],
+                        locations,
+                        line_params,
+                        max_transitions=1,
+                        min_agreeing_lines=1,
+                    )
+                ]
+            for method, t, line_rows in fits:
+                for line in t["lines"]:
+                    line["row"] = first_row + line_rows[line["row"]]
+                del t["passes"]
+                candidates.setdefault(int(shank), []).append(
+                    {"method": method, "block_index": block_idx}
+                    | {"label": label}
+                    | t
+                )
+
+    shanks = {
+        str(shank): {
+            "candidates": sorted(
+                found_on_shank, key=lambda c: c["delta_bic"], reverse=True
+            )
+        }
+        for shank, found_on_shank in sorted(candidates.items())
+    }
+    for shank in np.unique(channel_table.shank_ind):
+        shanks.setdefault(str(int(shank)), {"candidates": []})
+
+    np.save(
+        output_folder / "_iblqc_ephysLineAmplitude.amps.npy",
+        np.concatenate(amps).astype(np.float32),
+    )
+    np.save(
+        output_folder / "_iblqc_ephysLineAmplitude.freqs.npy",
+        np.array([line["freq_hz"] for line in lines], dtype=np.float64),
+    )
+    with open(output_folder / "brain_surface.json", "w") as f:
+        json.dump(
+            {
+                "version": "1.0",
+                "depth_frame": "channels.localCoordinates y, um",
+                "shanks": dict(
+                    sorted(shanks.items(), key=lambda kv: int(kv[0]))
+                ),
+                "lines": lines,
+            },
+            f,
+            indent=2,
+        )
+
+
 def _save_band_corr_matrices(
     band_corr_folder: Path,
     correlation: dict[str, np.ndarray],
@@ -420,6 +555,7 @@ def _save_method_metadata(
     rms_window_interval: float,
     rms_window_duration: float,
     coherence_block_source: CoherenceBlockSource,
+    line_params: LineParams | None = None,
 ) -> None:
     """Save method metadata for forward compatibility.
 
@@ -427,9 +563,9 @@ def _save_method_metadata(
     determine what kind of metrics are in the output files
     (e.g. coherence vs correlation).
     """
-    metadata = {
+    metadata: dict = {
         "method": "fft_coherence",
-        "version": "1.1",
+        "version": "1.2",
         "metrics": {
             "rms": "parseval_fft",
             "band_corr": "magnitude_squared_coherence",
@@ -442,6 +578,14 @@ def _save_method_metadata(
             "coherence_block_source": coherence_block_source,
         },
     }
+    if line_params is not None:
+        metadata["metrics"]["line_amplitude"] = "common_mode_multitaper_f_test"
+        # Lines are measured before the common-median reference.
+        metadata["parameters"]["line_detection"] = {
+            "window_s": rms_window_duration,
+            "cmr": False,
+            **dataclasses.asdict(line_params),
+        }
     path = output_folder / "_iblqc_metrics.method.json"
     with open(path, "w") as f:
         json.dump(metadata, f, indent=2)
@@ -473,6 +617,8 @@ def _assemble_and_save_stream(
     rms_window_interval: float,
     rms_window_duration: float,
     coherence_block_source: CoherenceBlockSource = "all",
+    line_params: LineParams | None = None,
+    driven_tone_hz: float | None = None,
 ) -> None:
     """Assemble block results and save all outputs for one stream.
 
@@ -494,7 +640,13 @@ def _assemble_and_save_stream(
         Window interval parameter (saved to method metadata).
     rms_window_duration : float
         Window duration parameter (saved to method metadata).
+    line_params : LineParams or None
+        Surface-call gates; defaults to ``LineParams()``.
+    driven_tone_hz : float or None
+        See ``_save_line_outputs``.
     """
+    if line_params is None:
+        line_params = LineParams()
     output_folder = stream.output_folder
     output_folder.mkdir(exist_ok=True)
 
@@ -550,11 +702,18 @@ def _assemble_and_save_stream(
         )
         _save_channel_metadata(output_folder, [main_result.block.recording])
 
+    _save_line_outputs(
+        output_folder,
+        results if stream.has_surface else [main_result],
+        line_params,
+        driven_tone_hz=driven_tone_hz,
+    )
     _save_method_metadata(
         output_folder,
         rms_window_interval=rms_window_interval,
         rms_window_duration=rms_window_duration,
         coherence_block_source=coherence_block_source,
+        line_params=line_params,
     )
 
 

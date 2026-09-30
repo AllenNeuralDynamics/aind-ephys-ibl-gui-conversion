@@ -135,12 +135,14 @@ def extract_continuous(
     lfp_correlation_num_bins: int = 5,
     lfp_bandpass_margin_ms: float = 3000.0,
     coherence_block_source: CoherenceBlockSource = "all",
+    driven_tone_hz: float | None = None,
 ):
     """Extract QC metrics from raw ephys data using FFT-based computation.
 
     Computes AP and LFP RMS, LFP power spectral density, and
     per-band coherence matrices directly from the raw recording
-    via FFT.
+    via FFT, plus unreferenced interference-line amplitudes and the
+    brain-surface depth they imply.
 
     Parameters
     ----------
@@ -173,6 +175,9 @@ def extract_continuous(
     coherence_block_source : {"all", "main", "surface"}
         Block provenance used to aggregate correlation and coherency. Other
         metrics and channel metadata continue to use all blocks.
+    driven_tone_hz : float or None
+        Frequency of a tone driven into the animal, if one was; its line is
+        then gated as a ``driven`` surface call.
     """
     if session_folder is None:
         session_folder = Path(str(sorting_folder).split("_sorted")[0])
@@ -342,6 +347,7 @@ def extract_continuous(
             rms_window_interval=rms_window_interval,
             rms_window_duration=rms_window_duration,
             coherence_block_source=coherence_block_source,
+            driven_tone_hz=driven_tone_hz,
         )
 
     total_elapsed = (datetime.now() - start).total_seconds()

@@ -108,13 +108,14 @@ all. Roughly half of probes therefore yield no undriven surface, so the metric
 must be optional on the producing side and its absence must be ordinary on the
 consuming side.
 
-Reference implementation: the sibling checkout `aind-ephys-noise-survey`. Port
-the algorithm with attribution; do not take the dependency. The pieces that
-matter are `multitaper.make_taper_bank` / `eigencoefficients` /
-`harmonic_f_test` / `line_threshold`, `detect.detect_lines` and
-`detect.benjamini_hochberg`, `lines.extract_lines`, and
-`channels.classify_channels`, whose `_shared_line_factor` (rank-1 SVD across
-lines) and `_surface_index` (Otsu between-class variance) do the surface call.
+Reference implementation: the sibling checkout `aind-ephys-noise-survey`,
+ported with attribution rather than taken as a dependency. The port departs from
+it in both halves. Detection is by spectral excess, not a harmonic F-test: the
+discriminating lines are narrowband noise whose frequency wanders by hertz, so
+their F-statistic is near zero at any segment length. The surface fit replaces
+its rank-1 SVD and Otsu split, which assume every line shares one depth-profile
+shape; harmonics of one comb step by different amounts, with opposite signs,
+and at different depths.
 
 ### Why the existing PSD artifact cannot carry this
 
@@ -156,37 +157,44 @@ already in memory, so this costs no extra I/O:
   profile, but the common-mode line it depends on has been subtracted out and
   the surface call degrades to noise.
 
-Accumulate `|X|**2` per channel over the AP band the way `psd_accum` does for
-the LFP band, then, after the loop:
+Accumulate unreferenced Hann power per channel over 300 Hz–15 kHz, then, after
+the loop (`lines.py`):
 
-- Detect candidate lines on the across-channel median spectrum — harmonic
-  F-test against the local background, candidates thinned by minimum
-  separation, accepted under Benjamini-Hochberg at `detect_q`. Group harmonics
-  into families so one mains comb is one candidate, not sixty.
-- Build the per-channel amplitude profile for each accepted line.
-- Select the surface. Test **each line separately and in both polarities** and
-  take the sharpest step; lines disagree about which side of the boundary they
-  are stronger on. Keep the rank-1 shared fit as a secondary candidate, gated on
-  explained variance, but do not prefer it: on the stream cited above the best
-  single line scored a CNR of 110 against 3.9 for the rank-1 fit over 8 lines.
-- Gate the result. Below the CNR floor, report no surface rather than a guess.
-  `classify_channels` defaults — `min_line_cnr=3.0`, `min_line_rank1=0.5`,
-  `min_step_db=4.0`, `max_out_fraction=0.6`, `smooth=7` — are the calibrated
-  starting point; `min_step_db` is deliberately low because a **tip** reference
-  sits in tissue and mutes the step to about 5 dB.
-- Order channels by depth with the existing convention,
-  `np.lexsort((locs[:, 0], locs[:, 1]))` in `shank_info`, so probes with several
-  contacts at one depth do not flip column between depths.
+- **Detect** lines as peaks of the across-channel median of each channel's
+  power over a ring of background around it (inner 3 Hz, outer 25 Hz half-width),
+  thinned to the inner half-width and kept above 3 dB excess; the strongest 8
+  are measured. Each line's amplitude integrates the inner band, background
+  included, in V rms.
+- **Fit transitions** per shank and block, never across blocks. Each line's dB
+  profile along depth is `a + c*y + sum_t b_t * logistic((y - y_t) / w_t)`: the
+  locations `y_t` are shared by every line, while the baseline, linear trend,
+  step and the two widths either side of `y_t` are each line's own. A line may
+  step by any amount, either sign, or not at all; the trend absorbs smooth depth
+  gradients so they are not read as a transition. Widths run from a hard step
+  to 120 um. Dead and noisy channels (AP RMS below 0.15× or above 6× the shank
+  median) are excluded, and each line's outlying channels are replaced by its
+  running median before fitting.
+- **Up to two transitions.** A contact can be in tissue, in the bath or above
+  it, and line families that couple differently step at different depths, so a
+  second boundary is common and can be as strong as the surface. The largest
+  number of transitions that all pass is kept.
+- **Gate** each transition on per-line support, the weighted fit gain from
+  adding it, with each line's residual variance deflated for correlation
+  between neighbouring channels. A line agrees when its support beats a BIC
+  penalty for its step and two grid-searched widths; the transition passes when
+  at least two lines agree and the summed support clears the penalty by
+  `min_delta_bic` (500, provisional). The BIC penalty alone admits in-tissue
+  features, so this gate needs calibrating against insertion depths.
+- A **declared** driven tone (`extract_continuous(driven_tone_hz=)`) is also
+  fitted alone, one transition and one agreeing line, and kept as a `driven`
+  candidate.
+- Order channels shallow-first with `np.lexsort((x, -y))` so contacts sharing a
+  depth do not flip column between depths.
 
-A driven block, if one exists, supersedes all of this: the carrier profile is
-flat in tissue and falls above it, so the surface comes out to one contact row.
-Detect it as an unusually loud isolated line and record it as
-`surface_method = "driven"`. `driven.py` carries the offsets that separate
-carrier from shoulder from background (`CARRIER_HZ, SHOULDER_HZ, FAR_HZ = 8.0,
-(8.0, 60.0), (100.0, 140.0)`). Quiet rigs are exactly the ones that need a
-driven tone, since they offer no endogenous line to discriminate with — a few
-tens of microvolts rms at a frequency clear of the mains comb and its harmonics
-is ample, the 191 uV case above stood 49 dB over its surroundings.
+A driven tone is the strong case: the carrier profile is flat in tissue and
+falls above it. Quiet rigs are exactly the ones that need one, since they offer
+no endogenous line — a few tens of microvolts rms clear of the mains comb is
+ample; the 191 uV case above stood 49 dB over its surroundings.
 
 ### Artifacts
 
@@ -199,23 +207,25 @@ and `_build_row_channels_metadata` for provenance.
 - `_iblqc_ephysLineAmplitude.amps.npy` — `(n_lines, n_rows)` float32, V rms per
   channel per line, matching the RMS artifacts' units rather than the PSD's.
 - `_iblqc_ephysLineAmplitude.freqs.npy` — `(n_lines,)` float64, Hz.
-- `brain_surface.json` — the derived call: `surface_um`, `surface_method`
-  (`driven` / `lines` / `lf_hf` / `none`), `cnr`, `step_db`, `n_out_of_brain`,
-  the selected line's frequency, and the per-line table behind the choice. Read
-  it directly, the way `session_notes.txt` and `spike_shank_indices.npy` are
-  read in `EphysDataService._load_session_notes` and
-  `_attach_optional_shank_arrays`; `alfio.load_object` will not load it.
+- `brain_surface.json` — per shank, `candidates`: every passing transition from
+  every block, strongest `delta_bic` first, each with `method` (`lines` /
+  `driven`), `block_index`, `label`, `midpoint_um` (probe-local y), `width_um`
+  (median 10–90 % extent over agreeing lines), `interval_um`, `delta_bic`,
+  `n_agreeing_lines`, `n_lines`, and per line its `row` into the amplitude
+  arrays, `step_db`, the two logistic widths, `support` and `agrees`; plus a
+  top-level `lines` table aligned with the amplitude rows. None is chosen as
+  the surface. Read it directly, the way `session_notes.txt` and
+  `spike_shank_indices.npy` are read in `EphysDataService._load_session_notes`
+  and `_attach_optional_shank_arrays`; `alfio.load_object` will not load it.
 
 Both are optional. A stream with no usable line writes the amplitude arrays it
-did measure and a `brain_surface.json` whose `surface_method` is `"none"` —
-explicit unknown, not a missing file, matching the preference stated in the
-spike-sorting sidecar section above.
+did measure and empty `candidates` — explicit unknown, not a missing file,
+matching the preference stated in the spike-sorting sidecar section above.
 
 Extend `BlockMetrics` in `types.py` with the new arrays; keep the per-block
 provenance that `block_source()` already distinguishes, since a short surface
 block and a long main block see different interference. Add the parameters to
-`_save_method_metadata` (`line_detect_q`, the AP band edges, the window
-duration actually used, the CNR gates) and bump its `"version"` past `"1.1"`.
+`_save_method_metadata` and bump its `"version"` past `"1.1"`.
 
 ### GUI side
 
@@ -249,44 +259,37 @@ model for every step — copy its shape rather than inventing one.
    when `probe_keys()` is empty, so a line-free probe simply shows nothing.
    `plotting/menu_state.py` and `desktop/shell/menu_setup.py` then need no
    per-metric change.
-5. **Surface line.** Draw the estimate as a horizontal marker on the depth plots
-   with its method and CNR in the label, so a weak `lines` call is visibly
-   weaker than a `driven` one. Never draw it when `surface_method` is `"none"`.
+5. **Candidate markers.** Draw each candidate on the ephys depth panels as a
+   horizontal line at `midpoint_um` with a band for `width_um`, labelled with
+   method, agreeing lines and `delta_bic`, driven solid and lines dashed.
+   Selecting one shows its per-line steps and widths, ideally with each line's
+   profile and fitted logistic. Nothing is drawn when `candidates` is empty.
 
-The alignment payoff is the surface estimate, not the probe plots. The GUI's
-present notion of "in brain" comes from the alignment; this one comes from the
-recording, so the two can be compared. Offer it as a starting reference point
-for the top boundary rather than applying it — the user's judgment stays
-authoritative, and a driven-tone surface good to one contact row is a far
-stronger prior than a `lines` call scraping past its CNR gate.
+The alignment payoff is the candidates, not the probe plots. The GUI's present
+notion of "in brain" comes from the alignment; these come from the recording,
+so the two can be compared. They are display only, never applied: which
+candidate is the surface, where a bath boundary sits above it, is the user's
+call, and a driven-tone candidate is a far stronger prior than a `lines` one
+near its gate.
+
+Decided: the band is 300 Hz–15 kHz and only the accepted lines are stored; a
+driven tone is declared, not inferred from the spectrum; candidates are
+per-block; no LF/HF fallback is emitted, since it lands about 300 um too
+shallow.
 
 Open questions:
 
-- Which AP band to accumulate. The full Nyquist range is the most informative
-  and the most expensive; 300 Hz–15 kHz covers every line observed. Decide
-  whether to store the full line spectrum or only the accepted lines. Storing
-  only the accepted lines is ~10 rows per probe instead of tens of thousands,
-  but makes the detection un-revisable without a rerun.
-- Whether a driven block should be recognized automatically from its spectrum or
-  declared. Automatic detection risks promoting a loud rig line to "driven" and
-  reporting a false confidence; a declaration needs a producer-side flag that
-  does not exist yet.
-- Whether per-block or per-stream. A stream's surface should not move between
-  blocks, but a short surface block and a long main block will disagree on
-  amplitude. Emitting per-block and letting the consumer choose is the
-  conservative option and matches `row_channels.json` provenance.
-- Whether the LF/HF ratio fallback is worth emitting at all, given that it lands
-  about 300 um too shallow. It may be better to report no surface than one known
-  to be biased.
+- The `min_delta_bic` gate, and whether the upper of two candidates is
+  typically the bath surface, need insertion depths to settle.
 
 Acceptance criteria:
 
-- A stream with a strong interference line reports a surface depth, the line it
-  came from, and a CNR, and the GUI shows the per-line depth profiles.
-- A stream with no usable line writes `surface_method = "none"` and every GUI
-  plot and menu behaves as it does today, with no error and no empty panel.
-- A driven-tone block reports `surface_method = "driven"` and a surface whose
-  scatter is well under a decibel.
+- A stream with strong interference lines reports surface candidates with
+  midpoint, width and per-line support, and the GUI shows the per-line depth
+  profiles.
+- A stream with no usable line writes empty `candidates` and every GUI plot and
+  menu behaves as it does today, with no error and no empty panel.
+- A declared driven tone reports a `driven` candidate.
 - NP1.0 and NP2.0 streams both produce line amplitudes that are *not* common-
   median referenced; a regression test asserts the NP2.0 path reads the raw
   window before the in-place CMR subtract.

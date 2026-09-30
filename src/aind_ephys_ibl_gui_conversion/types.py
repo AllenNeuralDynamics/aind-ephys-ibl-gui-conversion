@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import spikeinterface as si
+
+if TYPE_CHECKING:
+    from aind_ephys_ibl_gui_conversion.lines import BlockLines
 
 
 @dataclass
@@ -90,3 +93,4 @@ class BlockMetrics:
     psd_power: np.ndarray  # (n_lfp_freqs, n_channels)
     psd_freqs: np.ndarray  # (n_lfp_freqs,)
     shank_channels: list[ShankChannels]  # per-shank channel info
+    lines: BlockLines | None = None  # unreferenced interference lines
