@@ -121,6 +121,7 @@ def extract_spikes(  # noqa: C901
     print(f"ecephys compressed folder: {ecephys_compressed_folder}")
 
     postprocessed_folder = sorting_folder / "postprocessed"
+    curated_folder = sorting_folder / "curated"
 
     stream_names, stream_ids = se.get_neo_streams(
         "openephysbinary", ecephys_folder
@@ -140,6 +141,7 @@ def extract_spikes(  # noqa: C901
             continue
 
         analyzer_mappings = []
+        curated_sorting_objs = []
         num_shanks = 0
         shank_glob = tuple(postprocessed_folder.glob(f"*{stream_name}*group*"))
         if shank_glob:
@@ -181,6 +183,9 @@ def extract_spikes(  # noqa: C901
                     continue
 
                 analyzer_mappings.append(analyzer)
+                curated_sorting_objs.append(
+                    si.load_sorting(curated_folder / analyzer_folder.name)
+                )
         else:
             analyzer_folder = _find_analyzer_folder(
                 postprocessed_folder, stream_name
@@ -195,6 +200,9 @@ def extract_spikes(  # noqa: C901
 
             analyzer = _load_analyzer(analyzer_folder)
             analyzer_mappings.append(analyzer)
+            curated_sorting_objs.append(
+                si.load(curated_folder / analyzer_folder.name)
+            )
 
         print("Converting data...")
 
@@ -254,24 +262,29 @@ def extract_spikes(  # noqa: C901
 
             qm_data = analyzer.get_extension("quality_metrics").get_data()
 
+            curated = curated_sorting_objs[index]
+            assert np.array_equal(curated.unit_ids, analyzer.unit_ids), (
+                "Curated and analyzer unit IDs do not match."
+            )
+
             qm_data.index.name = "cluster_id"
             qm_data["cluster_id.1"] = qm_data.index.values
-            if "default_qc" in analyzer.sorting.get_property_keys():
+            if (
+                "default_qc" in analyzer.sorting.get_property_keys()
+                or "default_qc" in curated.get_property_keys()
+            ):
                 qm_data["default_qc"] = analyzer.sorting.get_property(
                     "default_qc"
-                )
-
+                ) or curated.get_property("default_qc")
             if (
                 "decoder_label" in analyzer.sorting.get_property_keys()
+                or "decoder_label" in curated.get_property_keys()
                 or "unitrefine_label" in analyzer.sorting.get_property_keys()
             ):
-                unitrefine_column_name = (
-                    "decoder_label"
-                    if "decoder_label" in analyzer.sorting.get_property_keys()
-                    else "unitrefine_label"
-                )
-                qm_data["unitrefine_label"] = analyzer.sorting.get_property(
-                    unitrefine_column_name
+                qm_data["unitrefine_label"] = (
+                    analyzer.sorting.get_property("decoder_label")
+                    or analyzer.sorting.get_property("unitrefine_label")
+                    or curated.get_property("decoder_label")
                 )
 
             quality_metrics.append(qm_data)
