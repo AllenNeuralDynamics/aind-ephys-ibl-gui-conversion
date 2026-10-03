@@ -13,6 +13,7 @@ from aind_ephys_ibl_gui_conversion.lines import (
     LineAccumulator,
     LineParams,
     fit_transitions,
+    plateau_onset,
     pool_lines,
 )
 from aind_ephys_ibl_gui_conversion.metrics import _compute_all_metrics
@@ -417,3 +418,83 @@ def test_channels_without_the_lines_are_dropped():
     rms[20:22] = 1e-9  # adjacent, so outlier replacement keeps them
     found = fit_transitions(_two_lines(rms), _locations(), LineParams())
     assert [t["midpoint_um"] for t in found] == [SURFACE_MID_UM]
+
+
+# Bath between these depths, air above it, tissue grading the lines away
+# from their bath level below it.
+BATH_BOTTOM_UM = 600.0
+AIR_UM = 1000.0
+
+
+def _bath_profile(sign: float) -> np.ndarray:
+    y = _depths()
+    db = sign * 0.01 * np.clip(BATH_BOTTOM_UM - y, 0, None)
+    db = np.where(y > AIR_UM, db - 15.0, db)
+    return 10.0 * 10 ** (db / 20)
+
+
+def _bath_lines(seed: int = 0) -> np.ndarray:
+    return np.vstack(
+        [
+            _jittered(_bath_profile(-1.0), seed=2 * seed),
+            _jittered(_bath_profile(1.0), seed=2 * seed + 1),
+        ]
+    )
+
+
+def test_line_collapse_at_the_top_is_the_air_boundary():
+    found = fit_transitions(_bath_lines(), _locations(), LineParams())
+    assert found[-1]["midpoint_um"] == AIR_UM + PITCH_UM / 2
+    assert found[-1]["boundary"] == "air"
+    assert all(t["boundary"] is None for t in found[:-1])
+
+
+def test_lines_rising_at_the_surface_are_not_air():
+    found = fit_transitions(
+        _two_lines(_stepped_rms()), _locations(), LineParams()
+    )
+    assert [t["boundary"] for t in found] == [None]
+
+
+def test_plateau_onset_is_where_the_lines_leave_the_bath():
+    params = LineParams()
+    errors = []
+    for seed in range(10):
+        amps = _bath_lines(seed)
+        air = fit_transitions(amps, _locations(), params)[-1]
+        assert air["boundary"] == "air"
+        onset = plateau_onset(amps, _locations(), air, params)
+        assert onset is not None
+        assert onset["n_agreeing_lines"] == 2
+        # Opposite grading, so opposite steps.
+        steps = [line["step_db"] for line in onset["lines"]]
+        assert steps[0] > 0 > steps[1]
+        errors.append(onset["midpoint_um"] - BATH_BOTTOM_UM)
+    # The trace back up rides chance runs of the noise for a window or so.
+    assert np.median(np.abs(errors)) <= 2 * PITCH_UM
+
+
+def test_no_plateau_onset_when_the_lines_stay_at_the_bath_level():
+    params = LineParams()
+    flat = np.where(_depths() > AIR_UM, 10.0 * 10 ** (-15 / 20), 10.0)
+    amps = _two_lines(flat)
+    air = fit_transitions(amps, _locations(), params)[-1]
+    assert air["boundary"] == "air"
+    assert plateau_onset(amps, _locations(), air, params) is None
+
+
+def test_plateau_candidate_saved_and_air_listed_last():
+    traces = _traces(
+        12.0,
+        _bath_profile(-1.0),
+        second_rms_uv=_bath_profile(1.0),
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        surface = _save(
+            ExperimentBlock(_recording(traces), None, 0), Path(tmp)
+        )
+    candidates = surface["shanks"]["0"]["candidates"]
+    assert candidates[-1]["boundary"] == "air"
+    (plateau,) = [c for c in candidates if c["method"] == "plateau"]
+    assert abs(plateau["midpoint_um"] - BATH_BOTTOM_UM) <= 3 * PITCH_UM
+    assert plateau["block_indices"] == [0]

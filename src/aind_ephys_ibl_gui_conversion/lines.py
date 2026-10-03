@@ -22,6 +22,7 @@ import numpy as np
 import scipy.fft
 from scipy.ndimage import median_filter, uniform_filter1d
 from scipy.special import expit
+from scipy.stats import chi2
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,29 @@ class LineParams:
         Channels whose median line level sits this far below the shank's
         are excluded too: AP RMS misses a channel that carries noise but
         none of the lines, and adjacent ones survive outlier replacement.
+    air_step_db : float
+        Median drop, shallow side down, of the agreeing lines at the
+        shallowest transition for it to be labelled the air boundary. Lines
+        fall at the air because the contacts lose the bath, whereas they
+        rise at the brain surface.
+    plateau_guard_um, plateau_reference_um : float
+        Below the air boundary, the bath level of each line is its median
+        over ``plateau_reference_um`` starting this far below the boundary,
+        or half its width if wider.
+    plateau_window_um : float
+        Depth over which a line's mean departure from the bath level is
+        scored, at each depth going down.
+    plateau_enter_p, plateau_leave_p : float
+        Chi-squared tail probabilities of the lines' summed squared z of
+        that departure: the lines leave the bath where it falls below
+        ``plateau_enter_p`` over ``plateau_run`` depths, and the onset is
+        traced back up while it stays below ``plateau_leave_p``. Thresholds
+        rather than significance, since overlapping windows and neighbouring
+        channels correlate. The tissue below the bath grades the lines away
+        from it over hundreds of microns, so a single threshold places the
+        onset too deep.
+    plateau_run : int
+        Consecutive depths over ``plateau_enter``.
     """
 
     band_hz: tuple[float, float] = (300.0, 15000.0)
@@ -95,6 +119,13 @@ class LineParams:
     dead_ratio: float = 0.15
     noise_ratio: float = 6.0
     dead_line_db: float = 40.0
+    air_step_db: float = 1.0
+    plateau_guard_um: float = 60.0
+    plateau_reference_um: float = 200.0
+    plateau_window_um: float = 120.0
+    plateau_enter_p: float = 1e-12
+    plateau_leave_p: float = 1e-3
+    plateau_run: int = 3
 
 
 @dataclass
@@ -721,6 +752,45 @@ def _carries_lines(db: np.ndarray, params: LineParams) -> np.ndarray:
     return level > -params.dead_line_db
 
 
+def _prepare(
+    amps_v: np.ndarray,
+    locations_um: np.ndarray,
+    blocks: np.ndarray | None,
+    params: LineParams,
+) -> tuple[np.ndarray, _Profile] | None:
+    """Outlier-replaced dB profiles of the channels carrying the lines,
+    sorted by block then depth from the top; ``None`` when too few."""
+    if blocks is None:
+        blocks = np.zeros(amps_v.shape[1], dtype=int)
+    if amps_v.shape[0]:
+        live = _carries_lines(
+            20.0 * np.log10(np.maximum(amps_v, 1e-30)), params
+        )
+        amps_v, locations_um = amps_v[:, live], locations_um[live]
+        blocks = np.asarray(blocks)[live]
+    n_lines, n = amps_v.shape
+    if n_lines == 0 or n < 2 * params.min_side:
+        return None
+    order = np.lexsort((locations_um[:, 0], -locations_um[:, 1], blocks))
+    y = locations_um[order, 1].astype(float)
+    profile = _Profile.build(y, np.asarray(blocks)[order])
+    db = 20.0 * np.log10(np.maximum(amps_v[:, order], 1e-30))
+    db = _replace_outliers(db.astype(float), profile.segments, params)
+    return db, profile
+
+
+def _is_air(t: dict, params: LineParams) -> bool:
+    """Most lines, and every agreeing one, drop on the shallow side."""
+    steps = np.array(
+        [line["step_db"] for line in t["lines"] if line["agrees"]]
+    )
+    return bool(
+        steps.size >= max(params.min_agreeing_lines, t["n_lines"] / 2)
+        and np.all(steps < 0)
+        and np.median(steps) <= -params.air_step_db
+    )
+
+
 def fit_transitions(
     amps_v: np.ndarray,
     locations_um: np.ndarray,
@@ -732,7 +802,8 @@ def fit_transitions(
     """Brain-surface candidates on one shank from its line profiles.
 
     Fits up to ``max_transitions`` shared transition locations and keeps the
-    largest number whose every transition passes; ``[]`` when none does.
+    largest number whose every transition passes, or failing that the
+    passing ones of the largest model; ``[]`` when none passes.
     Which candidate is the brain surface is left to the reader: a second
     boundary, such as the bath surface, can be as strong.
 
@@ -759,11 +830,12 @@ def fit_transitions(
         Per transition, deepest first: ``midpoint_um``; ``width_um``, the
         median 10-90 % extent over agreeing lines; ``interval_um``, the
         midpoints within 3.84 of the best whitened fit; ``delta_bic``;
-        ``n_agreeing_lines``; ``n_lines``; and per line ``row``,
-        ``step_db`` (shallow minus deep), ``width_below_um``,
-        ``width_above_um`` (logistic scales), ``support``, ``agrees``, and
-        the joint fit's ``baseline_db`` per block at the tip and
-        ``trend_db_per_mm``.
+        ``n_agreeing_lines``; ``n_lines``; ``boundary``, ``"air"`` on the
+        shallowest transition when it passes ``_is_air`` and otherwise
+        ``None``; and per line ``row``, ``step_db`` (shallow minus deep),
+        ``width_below_um``, ``width_above_um`` (logistic scales),
+        ``support``, ``agrees``, and the joint fit's ``baseline_db`` per
+        block at the tip and ``trend_db_per_mm``.
     """
     if min_agreeing_lines is not None or max_transitions is not None:
         params = replace(
@@ -771,26 +843,15 @@ def fit_transitions(
             max_transitions=max_transitions or params.max_transitions,
             min_agreeing_lines=min_agreeing_lines or params.min_agreeing_lines,
         )
-    if blocks is None:
-        blocks = np.zeros(amps_v.shape[1], dtype=int)
-    if amps_v.shape[0]:
-        live = _carries_lines(
-            20.0 * np.log10(np.maximum(amps_v, 1e-30)), params
-        )
-        amps_v, locations_um = amps_v[:, live], locations_um[live]
-        blocks = np.asarray(blocks)[live]
-    n_lines, n = amps_v.shape
-    if n_lines == 0 or n < 2 * params.min_side:
+    prepared = _prepare(amps_v, locations_um, blocks, params)
+    if prepared is None:
         return []
-    order = np.lexsort((locations_um[:, 0], -locations_um[:, 1], blocks))
-    y = locations_um[order, 1].astype(float)
-    profile = _Profile.build(y, np.asarray(blocks)[order])
-    db = 20.0 * np.log10(np.maximum(amps_v[:, order], 1e-30))
-    db = _replace_outliers(db.astype(float), profile.segments, params)
-    centres = _identifiable_centres(y, profile, params)
+    db, profile = prepared
+    centres = _identifiable_centres(profile.y, profile, params)
     if not centres.size:
         return []
 
+    fallback: list[dict] = []
     for n_transitions in range(params.max_transitions, 0, -1):
         model, noise = _fit(db, profile, centres, n_transitions, params)
         if len(model) < n_transitions:
@@ -800,5 +861,166 @@ def fit_transitions(
         # neither required to pass nor reported.
         located = [t for t in found if not t.pop("pinned")]
         if all(t["passes"] for t in located):
-            return sorted(located, key=lambda t: t["midpoint_um"])
-    return []
+            return _label_air(located, params)
+        # Failing transitions absorb structure a passing one cannot fit
+        # alone, so its largest model is the fallback.
+        fallback = fallback or [t for t in located if t["passes"]]
+    return _label_air(fallback, params)
+
+
+def _label_air(found: list[dict], params: LineParams) -> list[dict]:
+    """*found* deepest first, the shallowest labelled air if ``_is_air``."""
+    found = sorted(found, key=lambda t: t["midpoint_um"])
+    for t in found:
+        t["boundary"] = None
+    if found and _is_air(found[-1], params):
+        found[-1]["boundary"] = "air"
+    return found
+
+
+def _hysteresis_onset(
+    z2: np.ndarray, params: LineParams
+) -> tuple[int, int] | None:
+    """Indices, into windows ordered top down, where the summed squared z
+    over lines of ``(n_lines, n_windows)`` *z2* first stays past
+    ``plateau_enter_p`` for ``plateau_run`` windows, and that traced back up
+    while past ``plateau_leave_p``."""
+    score = z2.sum(axis=0)
+    enter = chi2.isf(params.plateau_enter_p, z2.shape[0])
+    leave = chi2.isf(params.plateau_leave_p, z2.shape[0])
+    above = score >= enter
+    run = params.plateau_run
+    for entered in range(above.size - run + 1):
+        if above[entered : entered + run].all():
+            onset = entered
+            while onset > 0 and score[onset - 1] >= leave:
+                onset -= 1
+            return entered, onset
+    return None
+
+
+def plateau_onset(
+    amps_v: np.ndarray,
+    locations_um: np.ndarray,
+    air: dict,
+    params: LineParams,
+    blocks: np.ndarray | None = None,
+) -> dict | None:
+    """Where the lines leave their bath level, going down from the air.
+
+    Contacts in the bath see every line at a level that does not change
+    with depth; tissue grades them away from it, by a different amount and
+    sign per line and often gradually, so no step locates the brain surface
+    as reliably as the end of that plateau. Each depth is scored by the
+    lines' mean departure from the bath level over ``plateau_window_um``
+    below it, within the one block holding most of the bath.
+
+    Parameters
+    ----------
+    amps_v, locations_um, params, blocks
+        As for :func:`fit_transitions`.
+    air : dict
+        The air-boundary transition :func:`fit_transitions` returned.
+
+    Returns
+    -------
+    dict or None
+        ``None`` when no bath is recorded below the air or the lines never
+        leave it. Otherwise, in the shape of a :func:`fit_transitions`
+        transition: ``midpoint_um``, the onset, the top of the first
+        departing window; ``interval_um``, that window; ``width_um`` None;
+        ``delta_bic``, the leaving lines' summed ``support`` less a penalty
+        per line and for the location;
+        ``block_indices``, the block scored; ``boundary`` None; and per
+        line ``row``, ``onset_um`` (``None`` where it stays), ``step_db``
+        (bath level minus the mean over the window where its departure, or
+        else the lines', first holds), zero widths, ``support`` (that
+        window's squared z), ``agrees`` (it leaves), and ``baseline_db``
+        (the level below) with a zero trend, so a step at the onset draws
+        both levels.
+    """
+    prepared = _prepare(amps_v, locations_um, blocks, params)
+    if prepared is None:
+        return None
+    db, profile = prepared
+    guard = max(params.plateau_guard_um, (air.get("width_um") or 0.0) / 2)
+    top = air["midpoint_um"] - guard
+    reference_lo = top - params.plateau_reference_um
+
+    def in_reference(seg: slice) -> int:
+        """Channels of block *seg* in the bath reference."""
+        y = profile.y[seg]
+        return int(np.sum((y < top) & (y >= reference_lo)))
+
+    seg = max(profile.segments, key=in_reference)
+    if in_reference(seg) < params.min_side:
+        return None
+    y_all, db_seg = profile.y[seg], db[:, seg]
+    depths = np.unique(y_all)[::-1]  # top down
+    level = np.stack(
+        [np.median(db_seg[:, y_all == d], axis=1) for d in depths], axis=1
+    )
+    ref = (depths < top) & (depths >= reference_lo)
+    bath = np.median(level[:, ref], axis=1)
+    dev = level - bath[:, None]
+    noise = np.maximum(_robust_sd(np.diff(level, axis=1)) / np.sqrt(2.0), 1e-3)
+    tops = np.flatnonzero(
+        (depths < top) & (depths - params.plateau_window_um >= depths.min())
+    )
+    if not tops.size:
+        return None
+    window_mean = np.empty((db.shape[0], tops.size))
+    n_window = np.empty(tops.size)
+    for k, i in enumerate(tops):
+        w = (depths <= depths[i]) & (
+            depths > depths[i] - params.plateau_window_um
+        )
+        window_mean[:, k] = dev[:, w].mean(axis=1)
+        n_window[k] = w.sum()
+    z2 = (window_mean / (noise[:, None] / np.sqrt(n_window))) ** 2
+    found = _hysteresis_onset(z2, params)
+    if found is None:
+        return None
+    entered, onset = found
+    line_onsets = [_hysteresis_onset(z[None], params) for z in z2]
+    agrees = np.array([k is not None for k in line_onsets])
+    if agrees.sum() < params.min_agreeing_lines:
+        return None
+    # Scored where the departure first holds, which the onset by
+    # construction does not; each line at its own where it has one.
+    at = np.array([entered if k is None else k[0] for k in line_onsets])
+    rows = np.arange(db.shape[0])
+    support = z2[rows, at]
+    step = -window_mean[rows, at]
+    penalty = np.log(max(float(n_window[entered]), 2.0))
+    delta_bic = float(np.sum(support[agrees] - penalty)) - np.log(
+        max(float(tops.size), 2.0)
+    )
+    midpoint = float(depths[tops[onset]])
+    block = int(profile.blocks[seg][0])
+    return {
+        "midpoint_um": midpoint,
+        "width_um": None,
+        "interval_um": [midpoint - params.plateau_window_um, midpoint],
+        "delta_bic": delta_bic,
+        "n_agreeing_lines": int(agrees.sum()),
+        "n_lines": int(db.shape[0]),
+        "block_indices": [block],
+        "boundary": None,
+        "lines": [
+            {
+                "row": int(row),
+                "onset_um": None
+                if line_onsets[row] is None
+                else float(depths[tops[line_onsets[row][1]]]),
+                "step_db": float(step[row]),
+                "width_below_um": 0.0,
+                "width_above_um": 0.0,
+                "support": float(support[row]),
+                "agrees": bool(agrees[row]),
+                "baseline_db": {block: float(bath[row] - step[row])},
+                "trend_db_per_mm": 0.0,
+            }
+            for row in rows
+        ],
+    }

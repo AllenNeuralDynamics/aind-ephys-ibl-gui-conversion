@@ -18,6 +18,7 @@ from aind_ephys_ibl_gui_conversion.lines import (
     BlockLines,
     LineParams,
     fit_transitions,
+    plateau_onset,
     pool_lines,
     usable_channels,
 )
@@ -444,6 +445,42 @@ def _shank_profile(
     )
 
 
+def _shank_fits(
+    amps_v: np.ndarray,
+    locations: np.ndarray,
+    blocks: np.ndarray,
+    driven: int | None,
+    line_params: LineParams,
+) -> list[tuple[str, dict, np.ndarray]]:
+    """Each candidate on one shank with its method and the lines it was
+    fitted to, as indices into ``amps_v``."""
+    every = np.arange(amps_v.shape[0])
+    fits = [
+        ("lines", t, every)
+        for t in fit_transitions(amps_v, locations, line_params, blocks=blocks)
+    ]
+    air = [t for _, t, _ in fits if t["boundary"] == "air"]
+    if air:
+        onset = plateau_onset(
+            amps_v, locations, air[0], line_params, blocks=blocks
+        )
+        if onset is not None:
+            fits.append(("plateau", onset, every))
+    if driven is not None:
+        fits += [
+            ("driven", t, np.array([driven]))
+            for t in fit_transitions(
+                amps_v[[driven]],
+                locations,
+                line_params,
+                blocks=blocks,
+                max_transitions=1,
+                min_agreeing_lines=1,
+            )
+        ]
+    return fits
+
+
 def _save_line_outputs(
     output_folder: Path,
     results: list[BlockMetrics],
@@ -457,8 +494,11 @@ def _save_line_outputs(
     ``NaN`` on rows that block did not record; rows are not stitched across
     blocks because a line's level drifts between recordings. Each shank is
     fitted once over every block that recorded it, with a baseline per
-    block, and every passing transition is kept as a candidate. None is
-    chosen as the surface. ``brain_surface.json`` ``lines`` is aligned with
+    block, and every passing transition is kept as a candidate. Below one
+    labelled the air boundary, where the lines leave their bath level is
+    added as a ``plateau`` candidate. None is chosen as the surface;
+    candidates are listed strongest first, the air boundary last.
+    ``brain_surface.json`` ``lines`` is aligned with
     the amplitude rows. Frees each block's line power.
 
     Parameters
@@ -527,24 +567,9 @@ def _save_line_outputs(
             if pooled is None:
                 continue
             shank_amps, locations, blocks = pooled
-            fits = [
-                ("lines", t, np.arange(freqs.size))
-                for t in fit_transitions(
-                    shank_amps, locations, line_params, blocks=blocks
-                )
-            ]
-            if driven is not None:
-                fits += [
-                    ("driven", t, np.array([driven]))
-                    for t in fit_transitions(
-                        shank_amps[[driven]],
-                        locations,
-                        line_params,
-                        blocks=blocks,
-                        max_transitions=1,
-                        min_agreeing_lines=1,
-                    )
-                ]
+            fits = _shank_fits(
+                shank_amps, locations, blocks, driven, line_params
+            )
             block_indices = sorted({int(b) for b in blocks})
             for method, t, line_indices in fits:
                 for line in t["lines"]:
@@ -554,15 +579,17 @@ def _save_line_outputs(
                     line["amplitude_rows"] = {
                         b: first_row[b] + j for b in block_indices
                     }
-                del t["passes"]
+                t.pop("passes", None)
                 candidates.setdefault(int(shank), []).append(
                     {"method": method, "block_indices": block_indices} | t
                 )
 
     shanks = {
         str(shank): {
+            # The air boundary is never the surface, so it goes last.
             "candidates": sorted(
-                found_on_shank, key=lambda c: c["delta_bic"], reverse=True
+                found_on_shank,
+                key=lambda c: (c["boundary"] == "air", -c["delta_bic"]),
             )
         }
         for shank, found_on_shank in sorted(candidates.items())
