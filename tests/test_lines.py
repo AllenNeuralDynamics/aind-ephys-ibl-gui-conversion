@@ -393,3 +393,27 @@ class TestLineOutputs:
             amps = np.load(out / "_iblqc_ephysLineAmplitude.amps.npy")
         assert amps.shape == (0, N_CHANNELS)
         assert surface["shanks"]["0"]["candidates"] == []
+
+
+def _two_lines(rms: np.ndarray) -> np.ndarray:
+    return np.vstack([_jittered(rms, seed=0), _jittered(rms * 0.5, seed=1)])
+
+
+def test_step_at_the_end_of_the_shank_is_not_a_candidate():
+    rms = np.full(N_CHANNELS, 10.0)
+    rms[-3:] = 3.0
+    assert fit_transitions(_two_lines(rms), _locations(), LineParams()) == []
+
+
+def test_step_at_the_end_does_not_displace_the_surface():
+    rms = _stepped_rms()
+    rms[-3:] /= 4.0
+    found = fit_transitions(_two_lines(rms), _locations(), LineParams())
+    assert [t["midpoint_um"] for t in found] == [SURFACE_MID_UM]
+
+
+def test_channels_without_the_lines_are_dropped():
+    rms = _stepped_rms()
+    rms[20:22] = 1e-9  # adjacent, so outlier replacement keeps them
+    found = fit_transitions(_two_lines(rms), _locations(), LineParams())
+    assert [t["midpoint_um"] for t in found] == [SURFACE_MID_UM]

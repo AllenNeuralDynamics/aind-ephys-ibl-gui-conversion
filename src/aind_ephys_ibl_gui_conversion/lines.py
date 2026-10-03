@@ -49,6 +49,10 @@ class LineParams:
         per-line linear trend absorbs instead.
     min_side : int
         Fewest channels either side of a transition.
+    min_edge_um : float
+        Least recorded depth either side of a transition. The contacts at
+        the ends of a shank couple to the lines differently from the rest,
+        so a step within this of an end is an edge, not a boundary.
     min_separation_um : float
         Closest two transitions may sit.
     max_transitions : int
@@ -69,6 +73,10 @@ class LineParams:
     dead_ratio, noise_ratio : float
         Channels whose AP RMS falls below or above these multiples of the
         shank median are excluded from the surface fit.
+    dead_line_db : float
+        Channels whose median line level sits this far below the shank's
+        are excluded too: AP RMS misses a channel that carries noise but
+        none of the lines, and adjacent ones survive outlier replacement.
     """
 
     band_hz: tuple[float, float] = (300.0, 15000.0)
@@ -77,6 +85,7 @@ class LineParams:
     min_excess_db: float = 3.0
     widths_um: tuple[float, ...] = (0.0, 7.5, 15.0, 30.0, 60.0, 120.0)
     min_side: int = 7
+    min_edge_um: float = 100.0
     min_separation_um: float = 100.0
     max_transitions: int = 2
     min_agreeing_lines: int = 2
@@ -85,6 +94,7 @@ class LineParams:
     outlier_z: float = 3.5
     dead_ratio: float = 0.15
     noise_ratio: float = 6.0
+    dead_line_db: float = 40.0
 
 
 @dataclass
@@ -647,6 +657,7 @@ def _describe(
                     delta_bic >= params.min_delta_bic
                     and agrees.sum() >= params.min_agreeing_lines
                 ),
+                "pinned": _pinned(t.centre, free, profile),
                 "lines": [
                     {
                         "row": int(row),
@@ -670,19 +681,44 @@ def _describe(
     return out
 
 
+def _pinned(centre: float, free: np.ndarray, profile: _Profile) -> bool:
+    """Whether *centre* is the last admissible one inside some block: the
+    data then place it no further from that block's end, so it is the end's
+    offset rather than a located boundary."""
+    for seg in profile.segments:
+        y = profile.y[seg]
+        inside = free[(free > y.min()) & (free < y.max())]
+        if inside.size and centre in (inside.min(), inside.max()):
+            return True
+    return False
+
+
 def _identifiable_centres(
-    y: np.ndarray, profile: _Profile, min_side: int
+    y: np.ndarray, profile: _Profile, params: LineParams
 ) -> np.ndarray:
-    """Midpoints between depths with ``min_side`` channels of one block on
-    each side. A transition no block straddles is a block offset, so a
-    boundary between blocks that tile the shank is never a candidate."""
+    """Midpoints between depths with ``min_side`` channels and
+    ``min_edge_um`` of one block on each side. A transition no block
+    straddles is a block offset, so a boundary between blocks that tile the
+    shank is never a candidate."""
     depths = np.unique(y)
     mids = (depths[:-1] + depths[1:]) / 2
     ok = np.zeros(mids.size, dtype=bool)
     for seg in profile.segments:
         above = (y[seg][None, :] > mids[:, None]).sum(1)
-        ok |= (above >= min_side) & (y[seg].size - above >= min_side)
+        ok |= (
+            (above >= params.min_side)
+            & (y[seg].size - above >= params.min_side)
+            & (mids - y[seg].min() >= params.min_edge_um)
+            & (y[seg].max() - mids >= params.min_edge_um)
+        )
     return mids[ok]
+
+
+def _carries_lines(db: np.ndarray, params: LineParams) -> np.ndarray:
+    """Channels whose median level over lines, each line referenced to its
+    shank median, is within ``dead_line_db`` of the shank's."""
+    level = np.median(db - np.median(db, axis=1, keepdims=True), axis=0)
+    return level > -params.dead_line_db
 
 
 def fit_transitions(
@@ -735,17 +771,23 @@ def fit_transitions(
             max_transitions=max_transitions or params.max_transitions,
             min_agreeing_lines=min_agreeing_lines or params.min_agreeing_lines,
         )
+    if blocks is None:
+        blocks = np.zeros(amps_v.shape[1], dtype=int)
+    if amps_v.shape[0]:
+        live = _carries_lines(
+            20.0 * np.log10(np.maximum(amps_v, 1e-30)), params
+        )
+        amps_v, locations_um = amps_v[:, live], locations_um[live]
+        blocks = np.asarray(blocks)[live]
     n_lines, n = amps_v.shape
     if n_lines == 0 or n < 2 * params.min_side:
         return []
-    if blocks is None:
-        blocks = np.zeros(n, dtype=int)
     order = np.lexsort((locations_um[:, 0], -locations_um[:, 1], blocks))
     y = locations_um[order, 1].astype(float)
     profile = _Profile.build(y, np.asarray(blocks)[order])
     db = 20.0 * np.log10(np.maximum(amps_v[:, order], 1e-30))
     db = _replace_outliers(db.astype(float), profile.segments, params)
-    centres = _identifiable_centres(y, profile, params.min_side)
+    centres = _identifiable_centres(y, profile, params)
     if not centres.size:
         return []
 
@@ -754,6 +796,9 @@ def fit_transitions(
         if len(model) < n_transitions:
             continue
         found = _describe(db, profile, centres, model, noise, params)
-        if all(t["passes"] for t in found):
-            return sorted(found, key=lambda t: t["midpoint_um"])
+        # A pinned transition stays in the model to absorb the edge but is
+        # neither required to pass nor reported.
+        located = [t for t in found if not t.pop("pinned")]
+        if all(t["passes"] for t in located):
+            return sorted(located, key=lambda t: t["midpoint_um"])
     return []
