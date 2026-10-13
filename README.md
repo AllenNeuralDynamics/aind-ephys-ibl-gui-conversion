@@ -81,6 +81,7 @@ per-band RMS, PSD, and coherence files in IBL ALF format.
 | `rms_window_duration` | `4.0` | Length of each analysis window (s) |
 | `num_parallel_jobs` | `4` | Concurrent block processing |
 | `coherence_block_source` | `"all"` | Blocks contributing to correlation/coherency: `"all"`, `"main"`, or `"surface"`. PSD, RMS, and channel metadata still use all blocks. |
+| `unit_density_params` | `None` | Optional raw-AP activity-density settings; `None` uses `UnitDensityParams()` (one centered second). |
 
 Coherence bands (from `metrics.COHERENCE_BANDS`):
 
@@ -153,6 +154,7 @@ format.
 | `_iblqc_ephysTimeRmsLF*.timestamps.npy` | Window centers (s) |
 | `_iblqc_ephysSpectralDensityLF.power.npy` | PSD (V^2/Hz), shape (n_freqs, n_channels) |
 | `_iblqc_ephysSpectralDensityLF.freqs.npy` | Frequencies (Hz) |
+| `_iblqc_ephysRawUnitDensity.density.npy` | Normalized raw activity-density proxy (mm^-1), shape (n_shanks, n_depth_rows). |
 | `band_corr/<band>_mean_corr.npy` | Full per-band correlation matrix in channel-table row order |
 | `band_corr/<band>_coherency.npy` | Full per-band complex coherency matrix in channel-table row order |
 | `band_corr/<band>_shank<i>_mean_corr.npy` | Per-shank compatibility view sliced from the full matrix |
@@ -201,6 +203,11 @@ are:
 
 The output format is IBL ALF and is decoupled from input assumptions -- it
 will work with any IBL GUI consumer.
+
+The raw unit-density output is a normalized activity proxy, not an absolute
+unit count. It is intended for comparing profile shape and locating activity
+transitions. Each shank integrates to one, so peak magnitude cannot compare
+total unit abundance between shanks, sessions, or probes.
 
 ## Development
 

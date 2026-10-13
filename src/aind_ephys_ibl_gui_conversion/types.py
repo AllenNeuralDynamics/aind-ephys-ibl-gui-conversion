@@ -90,3 +90,6 @@ class BlockMetrics:
     psd_power: np.ndarray  # (n_lfp_freqs, n_channels)
     psd_freqs: np.ndarray  # (n_lfp_freqs,)
     shank_channels: list[ShankChannels]  # per-shank channel info
+    # Per-block intermediate: (n_channels,); noise-QC failures are NaN.
+    # Saved output is (n_shanks, n_depth_rows).
+    unit_density: np.ndarray | None = None
