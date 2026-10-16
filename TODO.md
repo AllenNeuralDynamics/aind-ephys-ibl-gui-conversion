@@ -45,7 +45,7 @@ Acceptance criteria:
 Per-channel support is now explicit: RMS arrays are dense in channel-table row
 order with `NaN` for rows a block did not record, so consumers join by row
 position and cannot mistake "not recorded" for a measured zero. See
-`docs/shank_channel_metadata_spec.md` §5.2.1.
+[the channel-table support contract](docs/shank_channel_metadata_spec.md#channel-table-and-join-key).
 
 Channel *pairs* still encode missing support as `0.0`. A pair is only measurable
 inside a block containing both members, so in multi-block streams the

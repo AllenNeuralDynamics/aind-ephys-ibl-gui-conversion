@@ -161,10 +161,17 @@ format.
 | `band_corr/channel_blocks.json` | Legacy multi-block channel map (only if surface-finding blocks are present) |
 | `channels.localCoordinates.npy` | Unique channel positions (x, y) |
 | `channels.rawInd.npy` | Legacy positional channel indices |
-| `channels.shankInd.npy` | 0-based shank index per channel-table row |
+| `channels.shankInd.npy` | Zero-based producer shank ID per channel-table row; physical IDs may be sparse |
+| `channels.contactId.npy` | Physical contact ID per channel-table row; empty string when unavailable |
 | `_iblqc_metrics.method.json` | Method metadata (FFT params, CMR flag) |
 
 ## Metrics method
+
+For the directory boundary shared with preprocessing and the GUI, channel
+identity, shank derivation, matrix row maps, and split-stream examples, read
+[the ephys collection contract](docs/shank_channel_metadata_spec.md).
+The datapackage references the collection directory, not individual QC files.
+Keep ALF objects at its root and correlation/coherency products in `band_corr/`.
 
 RMS and PSD are computed via FFT, not time-domain filtering:
 
@@ -204,27 +211,8 @@ will work with any IBL GUI consumer.
 
 ## Development
 
-Set up the environment:
-
-```bash
-uv sync
-```
-
-Run the full check suite:
-
-```bash
-./scripts/run_linters_and_checks.sh -c
-```
-
-Or run individual checks:
-
-```bash
-uv run --frozen ruff format                          # Code formatting
-uv run --frozen ruff check                           # Linting
-uv run --frozen interrogate -v src                   # Docstring coverage (100% required)
-uv run --frozen codespell --check-filenames          # Spell checking
-uv run --frozen pytest --cov aind_ephys_ibl_gui_conversion  # Tests with coverage
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md) for developer setup, checks, and
+repository conventions. Coding agents should also read [AGENTS.md](AGENTS.md).
 
 ## License
 
