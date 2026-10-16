@@ -69,6 +69,33 @@ uses `NaN` for contacts not recorded in that block. Missing support must not
 become zero, which is a valid measurement. Plot depth comes from
 `localCoordinates[rows, 1]`, never row number or assumed uniform spacing.
 
+## Recording Geometry And Surface-Finding Overlap
+
+Acquisitions can use different contact pitches, partial banks, gaps, and
+split-bank selections with two columns whose depth rows do not overlap.
+The Open Ephys GUI also permits overlapping recordings in surface-finding
+mode, and this capability is in use. A surface recording can therefore share
+contacts with the main recording; its label does not imply an adjacent bank.
+
+Use each block's physical `(x, y)` coordinates and block-to-table row map to
+place measurements. In the channel arrays, entry `i` describes the same
+physical contact across coordinates, shank assignments, and channel-aligned
+metrics. The alignment GUI uses these coordinates and assignments to select
+contacts and place values at physical depths. Array adjacency alone does not
+establish a physical neighborhood, especially across gaps or split banks.
+
+New per-contact metrics should follow this existing ordering and retain
+missing or rejected measurements as `NaN`. When blocks measure the same
+contact, define how repeated measurements are combined or retain separate
+block values. Deduplicating geometry does not define a rate-aggregation rule.
+
+A separately resampled depth profile needs explicit physical coordinates and
+coverage. Document how it pools columns, reconciles different pitches, and
+handles gaps, edge extrapolation, and smoothing. The smallest observed depth
+spacing need not divide every other spacing: contacts on 15 µm and 20 µm
+grids do not all lie on one 15 µm grid. Keep measured values and coverage
+available so display interpolation cannot conceal unsupported regions.
+
 ## Shank Identity
 
 `normalized_channel_groups()` uses this precedence:
