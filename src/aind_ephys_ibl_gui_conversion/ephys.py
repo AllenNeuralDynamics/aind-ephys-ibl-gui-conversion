@@ -41,11 +41,17 @@ from aind_ephys_ibl_gui_conversion.types import (
     ExperimentBlock,
     ProbeStream,
 )
+from aind_ephys_ibl_gui_conversion.unit_density import (
+    UnitDensityParams,
+    estimate_block_unit_density,
+)
 
 # Re-export for backward API compatibility
 __all__ = [
     "extract_continuous",
     "extract_spikes",
+    "UnitDensityParams",
+    "estimate_block_unit_density",
     # re-exported from recording_utils
     "_merge_separate_asset_recording_dicts",
     "_stream_to_probe_name",
@@ -135,6 +141,7 @@ def extract_continuous(
     lfp_correlation_num_bins: int = 5,
     lfp_bandpass_margin_ms: float = 3000.0,
     coherence_block_source: CoherenceBlockSource = "all",
+    unit_density_params: UnitDensityParams | None = None,
 ):
     """Extract QC metrics from raw ephys data using FFT-based computation.
 
@@ -173,6 +180,8 @@ def extract_continuous(
     coherence_block_source : {"all", "main", "surface"}
         Block provenance used to aggregate correlation and coherency. Other
         metrics and channel metadata continue to use all blocks.
+    unit_density_params : UnitDensityParams or None
+        Raw-AP activity-density settings. Defaults to ``UnitDensityParams()``.
     """
     if session_folder is None:
         session_folder = Path(str(sorting_folder).split("_sorted")[0])
@@ -210,6 +219,7 @@ def extract_continuous(
         results_folder,
         stream_to_use=stream_to_use,
         main_recording_min_secs=main_recording_min_secs,
+        block_source="main",
     )
 
     # Handle separate surface-finding asset
@@ -293,6 +303,9 @@ def extract_continuous(
                 window_interval=rms_window_interval,
                 window_duration=rms_window_duration,
             )
+            result.unit_density = estimate_block_unit_density(
+                block, unit_density_params
+            )
 
             total = (datetime.now() - block_start).total_seconds()
             n_win = len(result.timestamps)
@@ -342,6 +355,7 @@ def extract_continuous(
             rms_window_interval=rms_window_interval,
             rms_window_duration=rms_window_duration,
             coherence_block_source=coherence_block_source,
+            unit_density_params=unit_density_params,
         )
 
     total_elapsed = (datetime.now() - start).total_seconds()

@@ -30,6 +30,10 @@ from aind_ephys_ibl_gui_conversion.types import (
     ExperimentBlock,
     ProbeStream,
 )
+from aind_ephys_ibl_gui_conversion.unit_density import (
+    UnitDensityParams,
+    compose_raw_unit_density,
+)
 
 # ---------------------------------------------------------------------------
 # Recording loading
@@ -420,6 +424,7 @@ def _save_method_metadata(
     rms_window_interval: float,
     rms_window_duration: float,
     coherence_block_source: CoherenceBlockSource,
+    unit_density_params: UnitDensityParams | None = None,
 ) -> None:
     """Save method metadata for forward compatibility.
 
@@ -429,22 +434,54 @@ def _save_method_metadata(
     """
     metadata = {
         "method": "fft_coherence",
-        "version": "1.1",
+        "version": "1.2",
         "metrics": {
             "rms": "parseval_fft",
             "band_corr": "magnitude_squared_coherence",
             "psd": "welch_fft",
+            "raw_unit_density": "spatially_supported_threshold_crossings",
         },
         "parameters": {
             "rms_window_interval_s": rms_window_interval,
             "rms_window_duration_s": rms_window_duration,
             "cmr": True,
             "coherence_block_source": coherence_block_source,
+            "raw_unit_density": {
+                "semantics": "normalized_raw_activity_density_proxy",
+                "normalization": "unit_area_per_shank",
+                "array_layout": "shanks_by_depth_rows",
+                "bank_order": ["main", "surface"],
+                **vars(unit_density_params or UnitDensityParams()),
+            },
         },
     }
     path = output_folder / "_iblqc_metrics.method.json"
     with open(path, "w") as f:
         json.dump(metadata, f, indent=2)
+
+
+def _save_raw_unit_density(
+    output_folder: Path,
+    results: list[BlockMetrics],
+    params: UnitDensityParams | None = None,
+) -> None:
+    """Save one dense ``(shanks, depth rows)`` raw-AP density array."""
+    estimates = [result.unit_density for result in results]
+    if all(estimate is None for estimate in estimates):
+        return
+    if any(estimate is None for estimate in estimates):
+        raise RuntimeError(
+            "Every block must carry a raw unit-density estimate"
+        )
+    density = compose_raw_unit_density(
+        [result.block for result in results],
+        [estimate for estimate in estimates if estimate is not None],
+        params,
+    )
+    np.save(
+        output_folder / "_iblqc_ephysRawUnitDensity.density.npy",
+        density,
+    )
 
 
 def _save_channel_metadata(
@@ -473,6 +510,7 @@ def _assemble_and_save_stream(
     rms_window_interval: float,
     rms_window_duration: float,
     coherence_block_source: CoherenceBlockSource = "all",
+    unit_density_params: UnitDensityParams | None = None,
 ) -> None:
     """Assemble block results and save all outputs for one stream.
 
@@ -550,11 +588,14 @@ def _assemble_and_save_stream(
         )
         _save_channel_metadata(output_folder, [main_result.block.recording])
 
+    _save_raw_unit_density(output_folder, results, unit_density_params)
+
     _save_method_metadata(
         output_folder,
         rms_window_interval=rms_window_interval,
         rms_window_duration=rms_window_duration,
         coherence_block_source=coherence_block_source,
+        unit_density_params=unit_density_params,
     )
 
 
