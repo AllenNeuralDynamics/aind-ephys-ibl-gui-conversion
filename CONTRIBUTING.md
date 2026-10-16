@@ -44,6 +44,12 @@ filenames, or output directories, read
 [the ephys collection and geometry contract](docs/shank_channel_metadata_spec.md).
 The GUI depends on collection layout as well as explicit datapackage paths.
 
+For continuous metrics, start with the
+[authoring tutorial](docs/metric_extensions.md). It builds an AP-trace metric
+from a function, adapts it to LFP, and demonstrates FFT preparation with derived
+sampling and provenance. The linked API reference covers custom accumulators,
+pure reductions, and saving.
+
 This is a Python package using a `src/` layout. Source lives in
 `src/aind_ephys_ibl_gui_conversion/`, tests in `tests/`. No CLI entry points --
 the package is a library consumed by other AIND pipelines (notably
@@ -153,7 +159,7 @@ Open Ephys stream IDs follow
 
 ## Dependencies
 
-- **spikeinterface[full]** >= 0.103.0 -- Recording/Sorting abstractions,
+- **spikeinterface[metrics]** >= 0.104.0 -- Recording/Sorting abstractions,
   SortingAnalyzer, quality metrics, Phy export
 - **iblatlas** -- Atlas transforms
 - **one-api** >= 2.6.0 -- IBL data API

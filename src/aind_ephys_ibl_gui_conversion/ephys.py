@@ -19,6 +19,10 @@ from aind_ephys_ibl_gui_conversion.io import (
     load_probe_streams,
     process_stream_fft,
 )
+from aind_ephys_ibl_gui_conversion.metric_extensions import (
+    WindowMetric,
+    validate_metrics,
+)
 from aind_ephys_ibl_gui_conversion.metrics import (
     COHERENCE_BANDS,
     CoherenceBlockSource,
@@ -135,6 +139,7 @@ def extract_continuous(
     lfp_correlation_num_bins: int = 5,
     lfp_bandpass_margin_ms: float = 3000.0,
     coherence_block_source: CoherenceBlockSource = "all",
+    extra_metrics: tuple[WindowMetric, ...] = (),
 ):
     """Extract QC metrics from raw ephys data using FFT-based computation.
 
@@ -173,7 +178,11 @@ def extract_continuous(
     coherence_block_source : {"all", "main", "surface"}
         Block provenance used to aggregate correlation and coherency. Other
         metrics and channel metadata continue to use all blocks.
+    extra_metrics : tuple[WindowMetric, ...]
+        Opt-in immutable metric configurations. Each block creates its own
+        accumulator; stream adapters pool results after workers finish.
     """
+    validate_metrics(extra_metrics)
     if session_folder is None:
         session_folder = Path(str(sorting_folder).split("_sorted")[0])
     if coherence_block_source not in {"all", "main", "surface"}:
@@ -271,6 +280,11 @@ def extract_continuous(
 
     # Count total blocks for logging
     total_blocks = sum(len(s.blocks) for s in streams)
+    block_ids = {
+        id(block): f"{stream.stream_name}/block-{ordinal}"
+        for stream in streams
+        for ordinal, block in enumerate(stream.blocks)
+    }
     logging.info(
         f"[FFT] Processing {len(streams)} stream(s), "
         f"{total_blocks} block tasks "
@@ -292,6 +306,9 @@ def extract_continuous(
                 block,
                 window_interval=rms_window_interval,
                 window_duration=rms_window_duration,
+                extra_metrics=extra_metrics,
+                block_id=block_ids[id(block)],
+                main_recording_min_secs=main_recording_min_secs,
             )
 
             total = (datetime.now() - block_start).total_seconds()
@@ -342,6 +359,7 @@ def extract_continuous(
             rms_window_interval=rms_window_interval,
             rms_window_duration=rms_window_duration,
             coherence_block_source=coherence_block_source,
+            extra_metrics=extra_metrics,
         )
 
     total_elapsed = (datetime.now() - start).total_seconds()

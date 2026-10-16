@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import spikeinterface as si
+
+if TYPE_CHECKING:
+    from aind_ephys_ibl_gui_conversion.metric_context import BlockContext
+    from aind_ephys_ibl_gui_conversion.window_pipeline import ExecutionStats
 
 
 @dataclass
@@ -65,7 +69,7 @@ class ChannelTable:
     raw_ind: np.ndarray  # legacy positional rawInd, unchanged for now
     contact_id: np.ndarray  # physical probe contact ids in row order
     local_coordinates: np.ndarray  # (n_channels, 2)
-    shank_ind: np.ndarray  # 0-based producer shank IDs; may be sparse
+    shank_ind: np.ndarray  # 0-based normalized shank index per channel
 
 
 @dataclass
@@ -90,3 +94,6 @@ class BlockMetrics:
     psd_power: np.ndarray  # (n_lfp_freqs, n_channels)
     psd_freqs: np.ndarray  # (n_lfp_freqs,)
     shank_channels: list[ShankChannels]  # per-shank channel info
+    metric_results: dict[str, Any] = field(default_factory=dict)
+    metric_stats: ExecutionStats | None = None
+    metric_context: BlockContext | None = None

@@ -1,5 +1,6 @@
 """I/O helpers for loading recordings and saving ephys metrics."""
 
+import dataclasses
 import json
 import logging
 import re
@@ -12,6 +13,13 @@ import spikeinterface as si
 
 from aind_ephys_ibl_gui_conversion.channel_metadata import (
     build_channel_table,
+)
+from aind_ephys_ibl_gui_conversion.metric_context import metadata_array
+from aind_ephys_ibl_gui_conversion.metric_extensions import (
+    MetricBlockResult,
+    StreamContext,
+    WindowMetric,
+    validate_metrics,
 )
 from aind_ephys_ibl_gui_conversion.metrics import (
     CoherenceBlockSource,
@@ -27,6 +35,7 @@ from aind_ephys_ibl_gui_conversion.recording_utils import (
 )
 from aind_ephys_ibl_gui_conversion.types import (
     BlockMetrics,
+    ChannelTable,
     ExperimentBlock,
     ProbeStream,
 )
@@ -473,6 +482,7 @@ def _assemble_and_save_stream(
     rms_window_interval: float,
     rms_window_duration: float,
     coherence_block_source: CoherenceBlockSource = "all",
+    extra_metrics: tuple[WindowMetric, ...] = (),
 ) -> None:
     """Assemble block results and save all outputs for one stream.
 
@@ -494,6 +504,8 @@ def _assemble_and_save_stream(
         Window interval parameter (saved to method metadata).
     rms_window_duration : float
         Window duration parameter (saved to method metadata).
+    extra_metrics : tuple[WindowMetric, ...]
+        Optional adapters receiving all block results in stream block order.
     """
     output_folder = stream.output_folder
     output_folder.mkdir(exist_ok=True)
@@ -506,7 +518,7 @@ def _assemble_and_save_stream(
 
     # Canonical row map for the main block, so its RMS columns are saved on
     # channel-table rows rather than block-local ones.
-    _, block_maps, n_rows = _build_channel_maps(results)
+    channel_table, block_maps, n_rows = _build_channel_maps(results)
     main_row_map = next(
         row_map
         for row_map, r in zip(block_maps, results, strict=True)
@@ -556,6 +568,43 @@ def _assemble_and_save_stream(
         rms_window_duration=rms_window_duration,
         coherence_block_source=coherence_block_source,
     )
+    _save_extra_metrics(output_folder, channel_table, results, extra_metrics)
+
+
+def _save_extra_metrics(
+    output_folder: Path,
+    channel_table: ChannelTable,
+    results: list[BlockMetrics],
+    metrics: tuple[WindowMetric, ...],
+) -> None:
+    """Pass owned block results to adapters once, in canonical stream order."""
+    if not metrics:
+        return
+    validate_metrics(metrics)
+    table = dataclasses.replace(
+        channel_table,
+        **{
+            field.name: metadata_array(getattr(channel_table, field.name))
+            for field in dataclasses.fields(channel_table)
+        },
+    )
+    context = StreamContext(table)
+    outputs = []
+    for metric in metrics:
+        blocks = []
+        for result in results:
+            if result.metric_context is None:
+                raise ValueError(
+                    "Metric output requires resolved block context"
+                )
+            blocks.append(
+                MetricBlockResult(
+                    result.metric_context, result.metric_results[metric.name]
+                )
+            )
+        outputs.append((metric, metric.reduce(context, tuple(blocks))))
+    for metric, output in outputs:
+        metric.write(output_folder, output)
 
 
 def process_stream_fft(
@@ -566,6 +615,7 @@ def process_stream_fft(
     rms_window_interval: float = 30.0,
     rms_window_duration: float = 4.0,
     tag: str = "",
+    extra_metrics: tuple[WindowMetric, ...] = (),
     **kwargs,
 ):
     """Compute all ephys QC metrics for one recording.
@@ -580,6 +630,7 @@ def process_stream_fft(
         block,
         window_interval=rms_window_interval,
         window_duration=rms_window_duration,
+        extra_metrics=extra_metrics,
     )
 
     np.save(
@@ -625,3 +676,6 @@ def process_stream_fft(
 
     if save_channel_metadata:
         _save_channel_metadata(output_folder, [block.recording])
+    if extra_metrics:
+        table, _ = build_channel_table([block.recording])
+        _save_extra_metrics(output_folder, table, [metrics], extra_metrics)
