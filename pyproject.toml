@@ -24,10 +24,12 @@ dependencies = [
     "antspyx>=0.4.2",
     "iblatlas",
     "one-api>=2.6.0",
-    "spikeinterface[full]>=0.104.0",
     "tqdm>=4.66.1",
     "wavpack-numcodecs",
     "numpy",
+    "pandas>=2.3.3",
+    "scipy>=1.15.3",
+    "spikeinterface[metrics]>=0.104.0",
 ]
 
 [project.urls]
