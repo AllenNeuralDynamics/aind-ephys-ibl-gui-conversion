@@ -1,8 +1,7 @@
 """Sampled AP activity using the detector from conversion PR #46.
 
-The detector and robust block reduction preserve PR head 7731283. Sampling
-uses bounded snippets of the existing reads. Stream output keeps physical
-contacts instead of constructing the PR's normalized display grid.
+Sampling uses bounded snippets of existing reads. Spatial support uses
+physical distances within each shank; output retains existing contact rows.
 """
 
 from __future__ import annotations
@@ -15,6 +14,7 @@ from functools import partial
 import numpy as np
 import scipy.ndimage
 import scipy.signal
+from scipy.spatial import cKDTree
 
 from aind_ephys_ibl_gui_conversion.metric_context import (
     BlockContext,
@@ -38,12 +38,14 @@ from aind_ephys_ibl_gui_conversion.window_pipeline import (
 
 @dataclass(frozen=True)
 class ActivityParams:
-    """Ben's bandpass, MAD threshold, and neighboring-support thresholds."""
+    """Bandpass, MAD thresholds, and within-shank neighborhood radii."""
 
     highpass_hz: float = 300.0
     lowpass_hz: float = 6000.0
     threshold_sigma: float = 4.5
     support_sigma: float = 3.0
+    support_radius_um: float = 40.0
+    noise_radius_um: float = 100.0
 
     def filter(self, sampling_rate: float) -> np.ndarray:
         """Validate detector parameters and build the original SOS filter."""
@@ -66,31 +68,34 @@ class ActivityParams:
         )
 
 
+def _neighbors(locations: np.ndarray, radius: float) -> tuple[np.ndarray, ...]:
+    """Resolve Euclidean neighborhoods once, using probe-local micrometres."""
+    if not np.all(np.isfinite(locations)):
+        raise ValueError("Activity requires finite contact coordinates")
+    return tuple(
+        np.asarray(indices, dtype=int)
+        for indices in cKDTree(locations).query_ball_point(locations, radius)
+    )
+
+
 def _supported_candidates(
     filtered: np.ndarray,
     sigma: np.ndarray,
-    depths_um: np.ndarray,
+    neighbors: tuple[np.ndarray, ...],
     *,
     sampling_rate: float,
     threshold_sigma: float,
     support_sigma: float,
 ) -> np.ndarray:
-    """Preserve Ben's peak, artifact-veto, and channel-support rules.
+    """Count supported local peaks with at least 0.5 ms between events.
 
-    Support is an index neighborhood after depth/lateral sorting. Its size
-    is inferred from central depths; it is not a physical-distance graph.
-    This known geometry limitation is retained for detector parity.
+    Support requires two contacts, including the candidate contact, in a
+    0.25 ms moving window (at least three samples). Flat peaks count once.
+    Artifact vetoes extend 0.5 ms on either side of a contaminated sample.
     """
     z = filtered / sigma[None, :]
     refractory = max(round(0.0005 * sampling_rate), 3)
     support_time = max(round(0.00025 * sampling_rate), 3)
-    middle_depth = float(np.median(depths_um))
-    support_channels = max(
-        int(np.sum(np.abs(depths_um - middle_depth) <= 40.0)), 7
-    )
-    support_channels = min(support_channels, filtered.shape[1])
-    if support_channels % 2 == 0 and support_channels > 1:
-        support_channels -= 1
     artifact = np.mean(np.abs(z) > 8.0, axis=1) > 0.08
     artifact = scipy.ndimage.maximum_filter1d(
         artifact.astype(np.uint8), size=refractory * 2 + 1
@@ -100,43 +105,40 @@ def _supported_candidates(
         size=support_time,
         axis=0,
     )
-    support = scipy.ndimage.convolve1d(
-        loose,
-        np.ones(support_channels, dtype=np.uint16),
-        axis=1,
-        mode="constant",
-        cval=0,
-    )
-    local_minimum = filtered <= scipy.ndimage.minimum_filter1d(
-        filtered, size=refractory, axis=0, mode="nearest"
-    )
-    candidates = local_minimum & (z < -threshold_sigma) & (support >= 2)
-    candidates[artifact] = False
-    return np.asarray(candidates, dtype=bool)
+    candidates = np.zeros(filtered.shape, dtype=bool)
+    for channel, nearby in enumerate(neighbors):
+        peaks, _ = scipy.signal.find_peaks(
+            -filtered[:, channel],
+            height=threshold_sigma * sigma[channel],
+        )
+        peaks = peaks[z[peaks, channel] < -threshold_sigma]
+        supported = np.count_nonzero(loose[peaks[:, None], nearby], axis=1)
+        peaks = peaks[(supported >= 2) & ~artifact[peaks]]
+        # Resolve spacing only among eligible events, strongest first.
+        eligible = np.zeros(filtered.shape[0], dtype=filtered.dtype)
+        eligible[peaks] = -filtered[peaks, channel]
+        selected, _ = scipy.signal.find_peaks(eligible, distance=refractory)
+        candidates[selected, channel] = True
+    return candidates
 
 
 def _health_mask(
-    noises: np.ndarray, groups: tuple[np.ndarray, ...]
+    noises: np.ndarray, neighbors: tuple[np.ndarray, ...]
 ) -> np.ndarray:
-    """Apply the original local-noise and temporal-stability channel gates."""
+    """Apply noise-ratio gates using physical neighbors on the same shank."""
     noise_uv = np.median(noises, axis=0)
     healthy = np.zeros(noise_uv.size, dtype=bool)
-    for indices in groups:
-        local_noise = scipy.ndimage.median_filter(
-            noise_uv[indices], size=21, mode="nearest"
-        )
-        ratio = noise_uv[indices] / np.maximum(
-            local_noise, np.finfo(float).eps
-        )
-        temporal_ratio = np.percentile(noises[:, indices], 90, axis=0)
-        temporal_ratio /= np.maximum(
-            np.percentile(noises[:, indices], 10, axis=0), np.finfo(float).eps
-        )
-        healthy[indices] = (
-            np.isfinite(noise_uv[indices])
+    temporal_ratio = np.percentile(noises, 90, axis=0) / np.maximum(
+        np.percentile(noises, 10, axis=0), np.finfo(float).eps
+    )
+    for channel, nearby in enumerate(neighbors):
+        local_noise = np.median(noise_uv[nearby])
+        ratio = noise_uv[channel] / max(local_noise, np.finfo(float).eps)
+        healthy[channel] = (
+            np.isfinite(noise_uv[channel])
             & (ratio >= 0.25)
             & (ratio <= 4.0)
-            & (temporal_ratio <= 5.0)
+            & (temporal_ratio[channel] <= 5.0)
         )
     return healthy
 
@@ -186,11 +188,19 @@ class ActivityAccumulator:
             ]
             for shank in np.unique(source.shank_indices)
         )
-        self.health_groups = tuple(
-            (indices := np.flatnonzero(source.shank_indices == shank))[
-                np.argsort(source.locations[indices, 1], kind="stable")
-            ]
-            for shank in np.unique(source.shank_indices)
+        self.support_neighbors = tuple(
+            _neighbors(source.locations[indices], params.support_radius_um)
+            for indices in self.groups
+        )
+        health: list[np.ndarray | None] = [None] * source.n_channels
+        for indices in self.groups:
+            local = _neighbors(
+                source.locations[indices], params.noise_radius_um
+            )
+            for channel, nearby in zip(indices, local, strict=True):
+                health[channel] = indices[nearby]
+        self.health_neighbors = tuple(
+            nearby for nearby in health if nearby is not None
         )
         shape = (len(self.slots), source.n_channels)
         self.rates = np.zeros(shape, dtype=float)
@@ -210,7 +220,9 @@ class ActivityAccumulator:
             raise ValueError("Activity input shape does not match its plan")
         slot = self.slots[window_index]
         edge = self.sampling.edge_samples
-        for indices in self.groups:
+        for indices, neighbors in zip(
+            self.groups, self.support_neighbors, strict=True
+        ):
             shank_raw = raw[:, indices].copy()
             shank_raw -= np.median(shank_raw, axis=1, keepdims=True)
             filtered = scipy.signal.sosfiltfilt(self.sos, shank_raw, axis=0)
@@ -226,7 +238,7 @@ class ActivityAccumulator:
             candidates = _supported_candidates(
                 filtered,
                 sigma,
-                self.source.locations[indices, 1],
+                neighbors,
                 sampling_rate=self.source.sampling_frequency,
                 threshold_sigma=self.params.threshold_sigma,
                 support_sigma=self.params.support_sigma,
@@ -238,13 +250,13 @@ class ActivityAccumulator:
         self.seen.add(window_index)
 
     def finish(self) -> ActivityResult:
-        """Apply the original trimmed mean and channel-health gates."""
+        """Apply a trimmed mean and coordinate-based channel-health gates."""
         if len(self.seen) != len(self.slots):
             raise ValueError("Activity sampling did not complete")
         ordered = np.sort(self.rates, axis=0)
         trim = math.floor(0.1 * len(ordered))
         rates = np.mean(ordered[trim:-trim] if trim else ordered, axis=0)
-        healthy = _health_mask(self.noises, self.health_groups)
+        healthy = _health_mask(self.noises, self.health_neighbors)
         rates[~healthy] = np.nan
         seconds = np.where(
             healthy, len(ordered) * self.sampling.seconds_per_window, 0.0
@@ -260,7 +272,7 @@ class ActivityAccumulator:
 
 def raw_activity(
     *,
-    sampling: SampleBudget = SampleBudget(),
+    sampling: SampleBudget = SampleBudget(max_windows=1),
     params: ActivityParams = ActivityParams(),
     name: str = "rawActivity",
 ) -> Metric:
@@ -341,7 +353,12 @@ def raw_activity(
                 "pooling": "median of healthy per-block trimmed-mean rates",
                 "artifact_time_subtracted": False,
                 "coverage_is_rate_denominator": False,
-                "spatial_support": "legacy depth-sorted index neighborhood",
+                "spatial_support": "within-shank Euclidean radius in um",
+                "peak_spacing_seconds": 0.0005,
+                "peak_spacing_min_samples": 3,
+                "support_window_seconds": 0.00025,
+                "support_window_min_samples": 3,
+                "noise_health": "within-shank Euclidean radius in um",
                 "reference": "per-shank common median",
                 "blocks": provenance,
             },
