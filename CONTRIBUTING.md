@@ -50,6 +50,10 @@ from a function, adapts it to LFP, and demonstrates FFT preparation with derived
 sampling and provenance. The linked API reference covers custom accumulators,
 pure reductions, and saving.
 
+The [sampling and execution overview](docs/continuous_metric_pipeline.md)
+explains experiment blocks, time windows, shared reads and FFTs, worker limits,
+and stream assembly.
+
 This is a Python package using a `src/` layout. Source lives in
 `src/aind_ephys_ibl_gui_conversion/`, tests in `tests/`. No CLI entry points --
 the package is a library consumed by other AIND pipelines (notably
@@ -160,7 +164,11 @@ Open Ephys stream IDs follow
 ## Dependencies
 
 - **spikeinterface[metrics]** >= 0.104.0 -- Recording/Sorting abstractions,
-  SortingAnalyzer, quality metrics, Phy export
+  SortingAnalyzer, and quality metrics. The converter uses the `metrics` extra;
+  the `full` extra also installs unused CUDA, sorting, and visualization
+  dependencies.
+- **pandas, scipy** -- Direct dependencies for spike metadata tables and
+  continuous-signal calculations
 - **iblatlas** -- Atlas transforms
 - **one-api** >= 2.6.0 -- IBL data API
 - **antspyx** >= 0.4.2 -- Used by `histology.py` only
