@@ -890,5 +890,5 @@ class TestMetricSupport:
         assert observed.sum() == main_locations.shape[0]
         assert np.all(np.isfinite(rms[:, observed]))
         assert np.all(np.isnan(rms[:, ~observed]))
-        assert method["version"] == "1.2"
+        assert method["version"] == "1.1"
         assert method["parameters"]["coherence_block_source"] == "all"

@@ -260,7 +260,7 @@ class ActivityAccumulator:
 
 def raw_activity(
     *,
-    sampling: SampleBudget = SampleBudget(),
+    sampling: SampleBudget = SampleBudget(max_windows=1),
     params: ActivityParams = ActivityParams(),
     name: str = "rawActivity",
 ) -> Metric:

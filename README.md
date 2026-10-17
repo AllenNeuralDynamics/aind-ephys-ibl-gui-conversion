@@ -83,6 +83,9 @@ per-band RMS, PSD, and coherence files in IBL ALF format.
 | `coherence_block_source` | `"all"` | Blocks contributing to correlation/coherency: `"all"`, `"main"`, or `"surface"`. PSD, RMS, and channel metadata still use all blocks. |
 | `extra_metrics` | `()` | Optional [metric extensions](docs/metric_extensions.md) sharing the existing sampled reads and FFTs |
 
+For optional per-channel AP event rates, see [raw activity](docs/raw_activity.md).
+Enable it through `extra_metrics` to share the default metrics' recording reads.
+
 Coherence bands (from `metrics.COHERENCE_BANDS`):
 
 | Band | Range (Hz) |

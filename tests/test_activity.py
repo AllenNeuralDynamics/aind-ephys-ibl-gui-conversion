@@ -1,5 +1,6 @@
 """Activity detector parity, bounded sampling, and explicit reductions."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +14,8 @@ from aind_ephys_ibl_gui_conversion.activity import (
     _supported_candidates,
     raw_activity,
 )
+from aind_ephys_ibl_gui_conversion.channel_metadata import build_channel_table
+from aind_ephys_ibl_gui_conversion.io import _save_extra_metrics
 from aind_ephys_ibl_gui_conversion.metric_context import (
     SampleBudget,
     SourceContext,
@@ -169,3 +172,77 @@ def test_bad_activity_configuration_fails_before_reads(metric, monkeypatch):
     monkeypatch.setattr(block.recording, "get_traces", forbidden)
     with pytest.raises(ValueError):
         _compute_all_metrics(block, window_duration=2, extra_metrics=(metric,))
+
+
+def test_trimmed_block_mean_keeps_coverage_as_descriptive_support():
+    """Remove one rate from each tail without reducing analyzed duration."""
+    source = SourceContext.from_recording(
+        reference_recording(), 625, np.arange(12) * 0.25
+    )
+    plan = SampleBudget(12, 0.25).resolve(source)
+    params = ActivityParams(lowpass_hz=1000)
+    accumulator = ActivityAccumulator(
+        source, plan, params, params.filter(2500)
+    )
+    accumulator.rates[:] = np.array([0, *range(1, 11), 100])[:, None]
+    accumulator.noises[:] = 1
+    accumulator.seen.update(plan.window_indices)
+    result = accumulator.finish()
+    np.testing.assert_allclose(result.rate_hz, 5.5)
+    np.testing.assert_allclose(
+        result.sampled_seconds, 12 * plan.seconds_per_window
+    )
+
+
+def test_output_retains_overlap_pitch_columns_depth_and_missingness(tmp_path):
+    """Save native contact rows without grids, interpolation, or stacking."""
+    first = np.array([[0, 500], [32, 515], [0, 530], [32, 545]])
+    second = np.array([[32, 545], [0, 560], [32, 580], [0, 600]])
+    recordings = []
+    for coords in (first, second):
+        recording = si.NumpyRecording(np.zeros((1000, 4), np.float32), 2000)
+        recording.set_property("location", coords)
+        recording.set_property("group", np.zeros(4, dtype=int))
+        recordings.append(recording)
+    table, maps = build_channel_table(recordings)
+    template = _compute_all_metrics(make_block("np2"), window_duration=2)
+    blocks = []
+    for index, (recording, rates) in enumerate(
+        zip(recordings, ([1, 2, 3, 4], [8, 10, np.nan, 12]), strict=True)
+    ):
+        source = SourceContext.from_recording(recording, 1000, np.array([0.0]))
+        context = replace(
+            template.metric_context,
+            ap=source,
+            block_index=index,
+            block_source="main" if index == 0 else "surface",
+            block_id=f"block-{index}",
+        )
+        plan = SampleBudget(1, 0.5).resolve(source)
+        healthy = np.isfinite(rates)
+        value = ActivityResult(
+            np.asarray(rates),
+            np.ones(4),
+            healthy,
+            np.where(healthy, plan.seconds_per_window, 0.0),
+            plan,
+        )
+        blocks.append(
+            replace(
+                template,
+                metric_context=context,
+                metric_results={"rawActivity": value},
+            )
+        )
+    _save_extra_metrics(tmp_path, table, blocks, (raw_activity(),))
+    saved = np.load(tmp_path / "_iblqc_channels.rawActivity.npy")
+    duration = np.load(
+        tmp_path / "_iblqc_channels.rawActivitySampledDuration.npy"
+    )
+    assert len(saved) == 7  # The overlapping physical contact has one row.
+    np.testing.assert_array_equal(saved[maps[0]], [1, 2, 3, 6])
+    np.testing.assert_array_equal(saved[maps[1]], [6, 10, np.nan, 12])
+    assert duration[maps[1][2]] == 0
+    assert duration[maps[0][-1]] == pytest.approx(0.9)
+    np.testing.assert_array_equal(table.local_coordinates[maps[0]], first)
+    np.testing.assert_array_equal(table.local_coordinates[maps[1]], second)
