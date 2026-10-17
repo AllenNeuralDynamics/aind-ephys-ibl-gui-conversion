@@ -1,5 +1,6 @@
 """I/O helpers for loading recordings and saving ephys metrics."""
 
+import dataclasses
 import json
 import logging
 import re
@@ -12,6 +13,13 @@ import spikeinterface as si
 
 from aind_ephys_ibl_gui_conversion.channel_metadata import (
     build_channel_table,
+)
+from aind_ephys_ibl_gui_conversion.metric_context import metadata_array
+from aind_ephys_ibl_gui_conversion.metric_extensions import (
+    MetricBlockResult,
+    StreamContext,
+    WindowMetric,
+    validate_metrics,
 )
 from aind_ephys_ibl_gui_conversion.metrics import (
     CoherenceBlockSource,
@@ -27,12 +35,9 @@ from aind_ephys_ibl_gui_conversion.recording_utils import (
 )
 from aind_ephys_ibl_gui_conversion.types import (
     BlockMetrics,
+    ChannelTable,
     ExperimentBlock,
     ProbeStream,
-)
-from aind_ephys_ibl_gui_conversion.unit_density import (
-    UnitDensityParams,
-    compose_raw_unit_density,
 )
 
 # ---------------------------------------------------------------------------
@@ -424,7 +429,6 @@ def _save_method_metadata(
     rms_window_interval: float,
     rms_window_duration: float,
     coherence_block_source: CoherenceBlockSource,
-    unit_density_params: UnitDensityParams | None = None,
 ) -> None:
     """Save method metadata for forward compatibility.
 
@@ -434,54 +438,22 @@ def _save_method_metadata(
     """
     metadata = {
         "method": "fft_coherence",
-        "version": "1.2",
+        "version": "1.1",
         "metrics": {
             "rms": "parseval_fft",
             "band_corr": "magnitude_squared_coherence",
             "psd": "welch_fft",
-            "raw_unit_density": "spatially_supported_threshold_crossings",
         },
         "parameters": {
             "rms_window_interval_s": rms_window_interval,
             "rms_window_duration_s": rms_window_duration,
             "cmr": True,
             "coherence_block_source": coherence_block_source,
-            "raw_unit_density": {
-                "semantics": "normalized_raw_activity_density_proxy",
-                "normalization": "unit_area_per_shank",
-                "array_layout": "shanks_by_depth_rows",
-                "bank_order": ["main", "surface"],
-                **vars(unit_density_params or UnitDensityParams()),
-            },
         },
     }
     path = output_folder / "_iblqc_metrics.method.json"
     with open(path, "w") as f:
         json.dump(metadata, f, indent=2)
-
-
-def _save_raw_unit_density(
-    output_folder: Path,
-    results: list[BlockMetrics],
-    params: UnitDensityParams | None = None,
-) -> None:
-    """Save one dense ``(shanks, depth rows)`` raw-AP density array."""
-    estimates = [result.unit_density for result in results]
-    if all(estimate is None for estimate in estimates):
-        return
-    if any(estimate is None for estimate in estimates):
-        raise RuntimeError(
-            "Every block must carry a raw unit-density estimate"
-        )
-    density = compose_raw_unit_density(
-        [result.block for result in results],
-        [estimate for estimate in estimates if estimate is not None],
-        params,
-    )
-    np.save(
-        output_folder / "_iblqc_ephysRawUnitDensity.density.npy",
-        density,
-    )
 
 
 def _save_channel_metadata(
@@ -510,7 +482,7 @@ def _assemble_and_save_stream(
     rms_window_interval: float,
     rms_window_duration: float,
     coherence_block_source: CoherenceBlockSource = "all",
-    unit_density_params: UnitDensityParams | None = None,
+    extra_metrics: tuple[WindowMetric, ...] = (),
 ) -> None:
     """Assemble block results and save all outputs for one stream.
 
@@ -532,6 +504,8 @@ def _assemble_and_save_stream(
         Window interval parameter (saved to method metadata).
     rms_window_duration : float
         Window duration parameter (saved to method metadata).
+    extra_metrics : tuple[WindowMetric, ...]
+        Optional adapters receiving all block results in stream block order.
     """
     output_folder = stream.output_folder
     output_folder.mkdir(exist_ok=True)
@@ -544,7 +518,7 @@ def _assemble_and_save_stream(
 
     # Canonical row map for the main block, so its RMS columns are saved on
     # channel-table rows rather than block-local ones.
-    _, block_maps, n_rows = _build_channel_maps(results)
+    channel_table, block_maps, n_rows = _build_channel_maps(results)
     main_row_map = next(
         row_map
         for row_map, r in zip(block_maps, results, strict=True)
@@ -588,15 +562,49 @@ def _assemble_and_save_stream(
         )
         _save_channel_metadata(output_folder, [main_result.block.recording])
 
-    _save_raw_unit_density(output_folder, results, unit_density_params)
-
     _save_method_metadata(
         output_folder,
         rms_window_interval=rms_window_interval,
         rms_window_duration=rms_window_duration,
         coherence_block_source=coherence_block_source,
-        unit_density_params=unit_density_params,
     )
+    _save_extra_metrics(output_folder, channel_table, results, extra_metrics)
+
+
+def _save_extra_metrics(
+    output_folder: Path,
+    channel_table: ChannelTable,
+    results: list[BlockMetrics],
+    metrics: tuple[WindowMetric, ...],
+) -> None:
+    """Pass owned block results to adapters once, in canonical stream order."""
+    if not metrics:
+        return
+    validate_metrics(metrics)
+    table = dataclasses.replace(
+        channel_table,
+        **{
+            field.name: metadata_array(getattr(channel_table, field.name))
+            for field in dataclasses.fields(channel_table)
+        },
+    )
+    context = StreamContext(table)
+    outputs = []
+    for metric in metrics:
+        blocks = []
+        for result in results:
+            if result.metric_context is None:
+                raise ValueError(
+                    "Metric output requires resolved block context"
+                )
+            blocks.append(
+                MetricBlockResult(
+                    result.metric_context, result.metric_results[metric.name]
+                )
+            )
+        outputs.append((metric, metric.reduce(context, tuple(blocks))))
+    for metric, output in outputs:
+        metric.write(output_folder, output)
 
 
 def process_stream_fft(
@@ -607,6 +615,7 @@ def process_stream_fft(
     rms_window_interval: float = 30.0,
     rms_window_duration: float = 4.0,
     tag: str = "",
+    extra_metrics: tuple[WindowMetric, ...] = (),
     **kwargs,
 ):
     """Compute all ephys QC metrics for one recording.
@@ -621,6 +630,7 @@ def process_stream_fft(
         block,
         window_interval=rms_window_interval,
         window_duration=rms_window_duration,
+        extra_metrics=extra_metrics,
     )
 
     np.save(
@@ -666,3 +676,6 @@ def process_stream_fft(
 
     if save_channel_metadata:
         _save_channel_metadata(output_folder, [block.recording])
+    if extra_metrics:
+        table, _ = build_channel_table([block.recording])
+        _save_extra_metrics(output_folder, table, [metrics], extra_metrics)

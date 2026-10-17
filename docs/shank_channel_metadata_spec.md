@@ -1,261 +1,184 @@
-# Spec: Ephys Geometry Contract for IBL GUI Consumers
+# Ephys Collection And Channel Geometry Contract
 
-Status: **implementation v1**
-Owners: producing side = `aind-ephys-ibl-gui-conversion`; orchestration/datapackage side = `aind-ibl-ephys-alignment-preprocessing`; consuming side = `ibl-ephys-alignment-gui`.
+Status: current implementation. Conversion produces these artifacts;
+preprocessing describes the collection in `datapackage.json`; the alignment
+GUI consumes both explicit references and the collection layout.
 
-## 1. Problem
+## Collection Boundary
 
-Channel → shank → depth geometry is currently **re-derived independently** in ≥2 places:
+Each `(recording_id, ephys_collection)` has one ephys directory. Both spike
+extraction and continuous-metric extraction write into it. Spikes, clusters,
+channel metadata, and ALF QC objects are direct children; correlation and
+coherency products live in its `band_corr/` subdirectory.
 
-- Producing side derives shanks from SI `get_property("group")` and matches
-  channels across blocks by float location (`|Δloc| < 1e-6`).
-- The alignment GUI re-derives shanks from x-coordinate gaps
-  (`chn_x[i*2]`, i.e. "exactly 2 columns per shank"), and never uses the
-  channel metadata the producing side already writes (`channel_blocks.json`
-  is loaded and ignored).
+```text
+<recording_id>/<ephys_collection>/
+  spikes.*.npy
+  clusters.*.npy
+  clusters.metrics.csv
+  spike_shank_indices.npy
+  unit_shank_indices.npy
+  channels.{localCoordinates,rawInd,contactId,shankInd}.npy
+  _iblqc_ephysTimeRmsAP*.{rms,timestamps}.npy
+  _iblqc_ephysTimeRmsLF*.{rms,timestamps}.npy
+  _iblqc_ephysSpectralDensityLF*.{power,freqs}.npy
+  _iblqc_metrics.method.json
+  band_corr/
+    <band>_mean_corr.npy
+    <band>_coherency.npy
+    <band>_shank<k>_mean_corr.npy
+    <band>_shank<k>_coherency.npy
+    row_channels.json
+    channel_blocks.json
+```
 
-These independent derivations disagree on any geometry that violates the
-unstated assumptions (notably non-"quadbase" multi-shank layouts), producing
-wrong shank membership, mis-indexed correlation/coherency matrices, and
-silent full-probe fallbacks. Every multi-shank display bug we've hit is an
-instance of this pattern.
+This illustrates naming conventions, not files guaranteed in every run.
+Products depend on recording configuration and available measurements.
+`channel_blocks.json` is a legacy multi-block artifact. `Main` variants occur
+in multi-block output. See [README.md](../README.md) for metric semantics.
 
-`channels.rawInd.npy` is currently a legacy positional placeholder. This
-contract does **not** redefine it; channel-table row position is the join key.
-`channels.contactId.npy` carries the physical probe contact identity when
-probe metadata provides one. Consumers should tolerate its absence when loading
-older result folders; absence means contact-ID stitching is unavailable for
-that output.
+The datapackage explicitly references the collection directory and channel
+files. It does **not** enumerate each spike, QC, or matrix file. Their names,
+shapes, and placement are a separate producer–consumer contract. Moving QC
+requires a corresponding reader change; editing the datapackage alone cannot
+redirect individual QC objects. Schema validation does not establish that all
+plots have usable inputs. Preserve the complete collection when copying it.
 
-## 2. Principle
+## Channel Table And Join Key
 
-Derive the channel geometry **once**, on the producing side, from the
-authoritative probe grouping; **persist it** as explicit per-channel
-metadata; and have every consumer **reference it by a stable key** rather
-than re-deriving from coordinates. Make the correlation/coherency matrices
-**self-describing** (each row maps to a known channel).
+`channel_metadata.build_channel_table()` constructs one table across blocks.
+It deduplicates channels by `(x, y)` rounded to the nearest micrometre. Contact
+and shank IDs annotate the table; they are not deduplication keys. The first
+encountered channel supplies a new row's metadata, so overlapping blocks need
+consistent geometry and shank attribution.
 
-## 3. Scope
-
-In scope:
-- A per-ephys-collection channel table (source of truth) with explicit shank.
-- Self-describing full correlation/coherency matrices (row → channel map).
-- GUI consumes the table + row maps; drops the x-gap and size-equality
-  heuristics.
-- Datapackage uses explicit `logical_probe`, `ephys_collection`,
-  `histology_shank`, and `ephys_shank` fields so split-stream quadbase and
-  single-stream multi-shank probes are distinguishable.
-
-Out of scope (explicitly deferred; the model must *accommodate* but not
-*require* these):
-- Probe-level compute domain / merging a quadbase's separate streams into one
-  probe-level coherency matrix.
-- Joint (coupled) multi-shank alignment.
-
-Quadbase note: with streams left separate, each quadbase shank is its own
-probe output folder containing a trivial 1-shank channel table — the contract
-still holds; a future probe-merge produces a multi-shank table without
-changing the contract.
-
-## 4. The join key
-
-**The join key across all artifacts is the channel-table row position
-`0..N-1`.**
-
-- Per-channel arrays (rms, psd) remain in channel-table order; consumers
-  index them **positionally**.
-- `contactId`, `shankInd`, `rawInd`, and matrix row-maps are descriptive
-  fields keyed by that position. `rawInd` remains the legacy positional
-  placeholder for now; consumers must not depend on it as the row selector.
-- This is deliberately back-compatible: existing per-channel array ordering
-  keeps working; we only add metadata and stop deriving shank membership from
-  x-coordinate gaps.
-
-### 4.1 Ordering & spatial mapping (important)
-
-- The channel table is in **acquisition order** (first-occurrence of the
-  recording's channels after dedup). It is **NOT depth-sorted**, and for
-  Neuropixels position is not monotonic in depth.
-- Therefore **table position is an identity/join key only — never a spatial
-  coordinate.** Every physiology plot's depth/spatial axis MUST be computed from
-  `localCoordinates`, not from a row/column index.
-- Correlation matrices, coherency matrices, RMS plots, PSD plots, and any
-  future physiology plots may use channel-table rows to select data, but
-  must use `localCoordinates[rows]` to draw depth/lateral geometry.
-- Concretely: a matrix's depth axis is derived from
-  `localCoordinates[rows, 1]` (the depths of its rows), not from a linear
-  `depth_range / n_rows` scale. Do not assume rows are depth-sorted or
-  uniformly spaced. (The producer *constructs* `rows` depth-sorted by
-  convention, but consumers must still map via `localCoordinates` so a
-  non-uniform or non-monotonic layout renders correctly.)
-- Uniform-spacing caveat: a pyqtgraph ImageItem uses a single affine
-  scale+offset, which is exact only if the mapped depths are uniformly
-  spaced. For a single Neuropixels shank that holds (channels tile depth at
-  fixed pitch, typically 2 per depth); derive the affine from the actual
-  `localCoordinates[rows]` min/max and count. For genuinely non-uniform
-  layouts, resample the matrix onto a uniform depth grid before display.
-
-## 5. Data contract (artifacts)
-
-### 5.1 Channel table (per probe output folder)
-
-| file | dtype/shape | meaning |
+| File | Shape | Meaning |
 |---|---|---|
-| `channels.localCoordinates.npy` | float (N, 2) | (x, depth), unchanged |
-| `channels.rawInd.npy` | int (N,) | Legacy positional placeholder, unchanged |
-| `channels.contactId.npy` | str (N,) | Physical probe contact IDs in channel-table row order; empty string when unavailable |
-| `channels.shankInd.npy` | int (N,) | 0-based shank index per channel |
+| `channels.localCoordinates.npy` | `(N, 2)` | Lateral position and axial depth, in micrometres |
+| `channels.rawInd.npy` | `(N,)` | Legacy positional `0..N-1` placeholder |
+| `channels.contactId.npy` | `(N,)` | Physical contact IDs; empty strings when unavailable |
+| `channels.shankInd.npy` | `(N,)` | Zero-based producer shank ID per row, potentially sparse |
 
-- Canonical order: rows `0..N-1`. All per-channel arrays (rms, psd) MUST be
-  in this same column order.
+The join key is **table row position**, not `rawInd`, a device channel number,
+or contact ID. Order is first occurrence across blocks, not depth order.
+Block-local maps translate recording columns into table rows. Changing block
+order can change numbering; regenerate table, arrays, and row maps together.
 
-### 5.2 Correlation / coherency matrices
+RMS/PSD channel axes use table order. Per-block RMS retains all N columns and
+uses `NaN` for contacts not recorded in that block. Missing support must not
+become zero, which is a valid measurement. Plot depth comes from
+`localCoordinates[rows, 1]`, never row number or assumed uniform spacing.
 
-- `band_corr/{band}_mean_corr.npy` — (N, N) float — primary full collection
-  matrix in channel-table row order.
-- `band_corr/{band}_coherency.npy` — (N, N) complex — primary full collection
-  matrix in channel-table row order.
-- `band_corr/{band}_shank{k}_mean_corr.npy` — (n_k, n_k) float —
-  compatibility view sliced from the full matrix.
-- `band_corr/{band}_shank{k}_coherency.npy` — (n_k, n_k) complex —
-  compatibility view sliced from the full matrix.
-- `band_corr/row_channels.json` — always written (single- and multi-block):
+## Recording Geometry And Surface-Finding Overlap
+
+Acquisitions can use different contact pitches, partial banks, gaps, and
+split-bank selections with two columns whose depth rows do not overlap.
+The Open Ephys GUI also permits overlapping recordings in surface-finding
+mode, and this capability is in use. A surface recording can therefore share
+contacts with the main recording; its label does not imply an adjacent bank.
+
+Use each block's physical `(x, y)` coordinates and block-to-table row map to
+place measurements. In the channel arrays, entry `i` describes the same
+physical contact across coordinates, shank assignments, and channel-aligned
+metrics. The alignment GUI uses these coordinates and assignments to select
+contacts and place values at physical depths. Array adjacency alone does not
+establish a physical neighborhood, especially across gaps or split banks.
+
+New per-contact metrics should follow this existing ordering and retain
+missing or rejected measurements as `NaN`. When blocks measure the same
+contact, define how repeated measurements are combined or retain separate
+block values. Deduplicating geometry does not define a rate-aggregation rule.
+
+A separately resampled depth profile needs explicit physical coordinates and
+coverage. Document how it pools columns, reconciles different pitches, and
+handles gaps, edge extrapolation, and smoothing. The smallest observed depth
+spacing need not divide every other spacing: contacts on 15 µm and 20 µm
+grids do not all lie on one 15 µm grid. Keep measured values and coverage
+available so display interpolation cannot conceal unsupported regions.
+
+## Shank Identity
+
+`normalized_channel_groups()` uses this precedence:
+
+1. If every channel has a valid prefixed contact ID such as `s2e17`, use its
+   physical shank prefix (`2`), preserving potentially non-contiguous IDs.
+2. Otherwise normalize SpikeInterface `group` values to contiguous zero-based
+   indices in sorted unique-value order.
+3. If groups are absent, use one shank (`0`).
+
+Contact IDs come from the recording property or attached probe, projected into
+recording order through device channel indices when possible. Incomplete or
+malformed contact metadata is not used for physical identity. This preference
+matters for surface-finding blocks whose `group` can be flat despite spanning
+multiple shanks.
+
+The GUI normalizes producer IDs into local contiguous indices. For
+`[2, 2, 5, 5]`, local indices are `[0, 0, 1, 1]`. Physical IDs, local GUI
+indices, and one-based display labels are distinct.
+
+## Matrices And Row Maps
+
+Full correlation and complex coherency matrices have shape `(N, N)` in table
+order. `band_corr/row_channels.json` version 3 describes them:
 
 ```json
 {
   "version": 3,
-  "matrix_rows": [0, 1, 2],
+  "matrix_rows": [0, 1, 2, 3],
   "matrix_row_order": "channel_table",
   "shanks": {
-    "0": {
-      "rows": [<channel-table positions in display order>],
-      "legacy_file_index": 1,
-      "blocks": [
-        {"label": "main", "rows": [...], "n_windows": 240},
-        {"label": "surface", "rows": [...], "n_windows": 20}
-      ]
-    }
+    "0": {"rows": [1, 0], "legacy_file_index": 1, "blocks": []},
+    "1": {"rows": [3, 2], "legacy_file_index": 2, "blocks": []}
   }
 }
 ```
 
-- `matrix_rows` lists the primary full-matrix row order. It is the channel
-  table order.
-- `shanks.<k>.rows` lists, for each 0-based shank, the channel-table positions
-  of that shank in display order.
-- `blocks` carries main/surface provenance. `channel_blocks.json` may remain
-  as a temporary compatibility alias for multi-block data.
-- Producer construction convention: `rows` for shank k = channel-table
-  positions with `shankInd == k`, sorted by depth ascending. Persist
-  explicitly regardless of the convention.
+`shanks.<id>.rows` selects table positions sorted by axial depth, then lateral
+position. Select **both** matrix axes with these rows, and use the same rows to
+look up physical coordinates. Block entries record `block_index`, `label`,
+`rows`, `n_channels`, `duration_s`, and `n_windows`. Window counts supply
+aggregation weights; different blocks may cover different rows.
 
-### 5.2.1 Metric support
+Per-channel `NaN` support does not extend to every pairwise entry: currently
+unmeasured channel pairs can be stored as zero correlation/coherency. Zero is
+also a valid measured result. Do not infer pairwise support from matrix values
+alone; block row membership matters. See the open support work in
+[TODO.md](../TODO.md#pairwise-metric-support-for-correlation-and-coherency).
 
-**Every per-channel array is dense in channel-table row order**, including the
-single-block `*.rms.npy` and the `*Main` variants of multi-block streams. Row
-position is the only join key; the arrays never use block-local column order.
+JSON keys are producer shank IDs. Compatibility files use
+`legacy_file_index = producer_shank_id + 1` and are sliced from full matrices.
+The current GUI matrix reader tries the local-index key, then its one-based
+alternative, then filename fallbacks. It does not universally remap sparse
+producer IDs: successful channel selection does not guarantee every matrix
+plot handles arbitrary sparse IDs. Check both paths when changing numbering.
 
-A single block covers a subset of the probe's contacts, so rows that block did
-not record are **`NaN`**. `0 uV` is a valid RMS reading for a dead channel, so
-"not recorded" has to stay distinguishable from "recorded as zero". Consumers
-must treat `NaN` as unsupported rather than as data — and need no fallback for
-short arrays, because the arrays are never short.
+## Histology Joins And Worked Examples
 
-Because rows are addressed canonically, **block order carries no meaning**. The
-channel table assigns rows in first-seen order, so a different block order
-yields a different row assignment, but each stream's `channels.*.npy` and its
-RMS arrays always come from the same assignment and stay mutually consistent.
+Preprocessing groups manifest rows by `(recording_id, ephys_collection)` and
+records per-track `histology_shank` and `ephys_shank` in `xyz_picks`.
 
-Aggregated outputs (the untagged multi-block RMS summary, and PSD) always have
-full support: the channel table is a union over blocks, so every row is
-observed in at least one block.
+| Acquisition | Manifest mapping | GUI units |
+|---|---|---|
+| Two shanks in one stream | Same collection; ephys shanks 0 and 1 | Two local shanks within one collection |
+| Physical shank 3 in a split stream | `histology_shank=3`, `ephys_shank=0` | One local shank within its collection |
 
-`n_windows` in each `blocks[]` entry is the per-block window count used to
-weight all averaging, added in `version: 3`. Every per-row aggregation weight
-is derivable from it: a row's weight is the sum of `n_windows` over the blocks
-whose `rows` contain that row.
+The split stream may retain contact IDs such as `s3e17`; its one-shank table
+normalizes to local shank 0. Histology filenames can have one-based physical
+shank suffixes; never infer ephys membership from them. Spike/unit shank
+vectors come separately from sorting-analyzer enumeration and do not replace
+the per-channel shank table.
 
-### 5.3 Versioning
+## Compatibility And Review
 
-- `row_channels.json.version`. Consumers check for presence + version;
-  absence ⇒ legacy fallback (§8).
+Older folders may lack contact IDs, shank metadata, or row maps. The GUI keeps
+coordinate and filename fallbacks with narrower geometry assumptions. These
+fallbacks do not define new producer output. Merging separate acquisition
+streams into probe-wide matrices and coupled multi-shank alignment are outside
+this collection-level contract.
 
-## 6. Producing side changes (`aind-ephys-ibl-gui-conversion`)
-
-1. **New `build_channel_table(recordings) -> ChannelTable`** — the single
-   derivation point. Sources: `get_channel_locations()`,
-   `get_property("group")` for `shankInd`, and `get_property("contact_ids")`
-   or `get_probe().contact_ids` for `contactId`; `rawInd` remains positional.
-2. **`io.py` write paths** (`_assemble_and_save_stream` ~:355 and the
-   single-block path ~:484): write `rawInd`, `contactId`, and `shankInd` via the builder
-   in **both** paths. Ensure per-channel arrays share the table order.
-3. **Metrics**: compute pairwise correlation/coherency over the full ephys
-   collection. Do not compute primary pairwise artifacts per group/shank.
-4. **`_save_spectral_outputs`**: always emit `row_channels.json`. Save full
-   matrices first and derive shank-suffixed compatibility files from them.
-5. **Stitching** (`_assemble_blockwise_coherence` / `_build_channel_maps`):
-   match channels by normalized shank plus contact ID when available, falling
-   back to normalized shank plus rounded local coordinate when contact IDs are
-   missing or invalid. Preserve channel-table row order.
-6. **Tests** (`tests/test_fft_metrics.py`): assert `channels.shankInd.npy`
-   present and consistent with groups; single-block run also writes
-   `row_channels.json`; full matrix dims are N x N; shank compatibility matrix
-   dims match `row_channels.shanks[*].rows`.
-
-## 7. Consuming side changes (`ibl-ephys-alignment-gui`)
-
-1. **`PlotData.__init__` / `load_data_local`**: shank membership + `n_shanks`
-   from `channels.shankInd` (positions where `shankInd == k`). Remove the
-   `chn_x[i*2]` 2-column derivation (keep as fallback only, §8). `chn_coords`
-   / rms-psd indexing = those positions.
-2. **`get_lfp_correlation_data_img` + coherency**: load `row_channels.json`;
-   for the active shank take `rows`; select/order matrix rows by `rows`; map
-   depth from `localCoordinates[rows, 1]`. **Delete** the
-   `n_matrix == len(chn_coords)` heuristic and the full-probe linear fallback.
-   In particular, **derive the image's y-scale/offset from
-   `localCoordinates[rows]`, not from `depth_range / n_matrix`** — the current
-   linear index→depth mapping is a latent bug (it assumes rows are
-   depth-sorted and uniformly spaced; see §4.1). rms/psd already do this right
-   (depth grid via `chn_full`/`idx_full`); bring the correlation/coherency
-   images to the same standard.
-3. **Spike correlation** (`get_spike_correlation_data_img`): unchanged
-   (computed from filtered spikes, already self-consistent) — but its shank
-   membership now also derives from `shankInd`.
-4. **Stop loading-and-ignoring** `channel_blocks.json`; use `row_channels.json`.
-
-## 8. Backward compatibility / migration
-
-- Legacy datasets (no `shankInd` / no `row_channels.json`): GUI logs a warning
-  and falls back to current heuristics (x-gap shank split; size-equality depth
-  mapping). No hard break.
-- Existing shank-suffixed filenames remain as compatibility views. New full
-  matrix filenames are added. `rawInd` remains unchanged.
-- Optionally re-emit metadata for already-converted sessions via a small
-  backfill that runs `build_channel_table` against the saved recording.
-
-## 9. Open questions / verify before implementing
-
-- Confirm a real non-quadbase 4-shank `channels.localCoordinates`
-  layout (columns per shank) to be sure `get_property("group")` is populated
-  correctly upstream and the x-gap fallback is only ever a fallback.
-- Verify real AIND SpikeInterface/probeinterface recordings expose contact IDs
-  in channel order either as `get_property("contact_ids")` or via
-  `get_probe().contact_ids` / `device_channel_indices`.
-
-## 10. Bug classes eliminated by construction
-
-1. GUI mis-slicing on non-quadbase geometry (x-gap heuristic).
-2. Producing-vs-GUI shank disagreement (one persisted field).
-3. Correlation/coherency row mis-mapping (rows self-describe).
-4. Index-as-depth-proxy in physiology rendering (depth always via
-   `localCoordinates`; see §4.1).
-5. Datapackage ambiguity between physical/logical probe and ephys collection.
-
-## 11. Phasing
-
-- **Phase 1 (this spec):** channel table + self-describing matrices +
-  GUI consumes; single-base multi-shank correct; heuristics gone.
-- **Phase 2 (deferred):** probe-level compute domain (merge quadbase streams),
-  whole-probe coherency, shank as a pure coordinate.
-- **Phase 3 (deferred, part research):** coupled multi-shank alignment
-  (shared probe pose + regularized per-shank residual warps).
+Review `channel_metadata.py`, `metrics.py`, and `io.py`; preprocessing's
+`datapackage.py`; and GUI `services/ephys_data.py`,
+`geometry/channel_geometry.py`, and `plotting/builders/lfp_correlation.py`.
+Existing coverage includes `tests/test_fft_metrics.py` and GUI ephys-data,
+geometry, and LFP-correlation tests. Check surface/main overlap, non-depth-sorted
+channels, and split-stream identity when changing this contract.

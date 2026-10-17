@@ -81,7 +81,7 @@ per-band RMS, PSD, and coherence files in IBL ALF format.
 | `rms_window_duration` | `4.0` | Length of each analysis window (s) |
 | `num_parallel_jobs` | `4` | Concurrent block processing |
 | `coherence_block_source` | `"all"` | Blocks contributing to correlation/coherency: `"all"`, `"main"`, or `"surface"`. PSD, RMS, and channel metadata still use all blocks. |
-| `unit_density_params` | `None` | Optional raw-AP activity-density settings; `None` uses `UnitDensityParams()` (one centered second). |
+| `extra_metrics` | `()` | Optional [metric extensions](docs/metric_extensions.md) sharing the existing sampled reads and FFTs |
 
 Coherence bands (from `metrics.COHERENCE_BANDS`):
 
@@ -154,7 +154,6 @@ format.
 | `_iblqc_ephysTimeRmsLF*.timestamps.npy` | Window centers (s) |
 | `_iblqc_ephysSpectralDensityLF.power.npy` | PSD (V^2/Hz), shape (n_freqs, n_channels) |
 | `_iblqc_ephysSpectralDensityLF.freqs.npy` | Frequencies (Hz) |
-| `_iblqc_ephysRawUnitDensity.density.npy` | Normalized raw activity-density proxy (mm^-1), shape (n_shanks, n_depth_rows). |
 | `band_corr/<band>_mean_corr.npy` | Full per-band correlation matrix in channel-table row order |
 | `band_corr/<band>_coherency.npy` | Full per-band complex coherency matrix in channel-table row order |
 | `band_corr/<band>_shank<i>_mean_corr.npy` | Per-shank compatibility view sliced from the full matrix |
@@ -163,10 +162,17 @@ format.
 | `band_corr/channel_blocks.json` | Legacy multi-block channel map (only if surface-finding blocks are present) |
 | `channels.localCoordinates.npy` | Unique channel positions (x, y) |
 | `channels.rawInd.npy` | Legacy positional channel indices |
-| `channels.shankInd.npy` | 0-based shank index per channel-table row |
+| `channels.shankInd.npy` | Zero-based producer shank ID per channel-table row; physical IDs may be sparse |
+| `channels.contactId.npy` | Physical contact ID per channel-table row; empty string when unavailable |
 | `_iblqc_metrics.method.json` | Method metadata (FFT params, CMR flag) |
 
 ## Metrics method
+
+For the directory boundary shared with preprocessing and the GUI, channel
+identity, shank derivation, matrix row maps, and split-stream examples, read
+[the ephys collection contract](docs/shank_channel_metadata_spec.md).
+The datapackage references the collection directory, not individual QC files.
+Keep ALF objects at its root and correlation/coherency products in `band_corr/`.
 
 RMS and PSD are computed via FFT, not time-domain filtering:
 
@@ -204,34 +210,10 @@ are:
 The output format is IBL ALF and is decoupled from input assumptions -- it
 will work with any IBL GUI consumer.
 
-The raw unit-density output is a normalized activity proxy, not an absolute
-unit count. It is intended for comparing profile shape and locating activity
-transitions. Each shank integrates to one, so peak magnitude cannot compare
-total unit abundance between shanks, sessions, or probes.
-
 ## Development
 
-Set up the environment:
-
-```bash
-uv sync
-```
-
-Run the full check suite:
-
-```bash
-./scripts/run_linters_and_checks.sh -c
-```
-
-Or run individual checks:
-
-```bash
-uv run --frozen ruff format                          # Code formatting
-uv run --frozen ruff check                           # Linting
-uv run --frozen interrogate -v src                   # Docstring coverage (100% required)
-uv run --frozen codespell --check-filenames          # Spell checking
-uv run --frozen pytest --cov aind_ephys_ibl_gui_conversion  # Tests with coverage
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md) for developer setup, checks, and
+repository conventions. Coding agents should also read [AGENTS.md](AGENTS.md).
 
 ## License
 

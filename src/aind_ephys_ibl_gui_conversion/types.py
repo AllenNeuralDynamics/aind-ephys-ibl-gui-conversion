@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import spikeinterface as si
+
+if TYPE_CHECKING:
+    from aind_ephys_ibl_gui_conversion.metric_context import BlockContext
+    from aind_ephys_ibl_gui_conversion.window_pipeline import ExecutionStats
 
 
 @dataclass
@@ -90,6 +94,6 @@ class BlockMetrics:
     psd_power: np.ndarray  # (n_lfp_freqs, n_channels)
     psd_freqs: np.ndarray  # (n_lfp_freqs,)
     shank_channels: list[ShankChannels]  # per-shank channel info
-    # Per-block intermediate: (n_channels,); noise-QC failures are NaN.
-    # Saved output is (n_shanks, n_depth_rows).
-    unit_density: np.ndarray | None = None
+    metric_results: dict[str, Any] = field(default_factory=dict)
+    metric_stats: ExecutionStats | None = None
+    metric_context: BlockContext | None = None

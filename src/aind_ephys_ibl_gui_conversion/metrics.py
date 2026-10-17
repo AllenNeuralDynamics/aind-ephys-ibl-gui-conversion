@@ -1,7 +1,9 @@
 """FFT-based ephys metric computation."""
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import partial
 from typing import Literal
+from uuid import uuid4
 
 import numpy as np
 import scipy.fft
@@ -11,11 +13,31 @@ from aind_ephys_ibl_gui_conversion.channel_metadata import (
     depth_sorted_shank_rows,
     normalized_channel_groups,
 )
+from aind_ephys_ibl_gui_conversion.metric_context import (
+    BlockContext,
+    SourceContext,
+    metadata_array,
+)
+from aind_ephys_ibl_gui_conversion.metric_extensions import (
+    WindowMetric,
+    validate_metrics,
+)
+from aind_ephys_ibl_gui_conversion.spectral_accumulators import (
+    CrossSpectralAccumulator,
+    PsdAccumulator,
+    RmsAccumulator,
+    parseval_rms,
+)
 from aind_ephys_ibl_gui_conversion.types import (
     BlockMetrics,
     ChannelTable,
     ExperimentBlock,
     ShankChannels,
+)
+from aind_ephys_ibl_gui_conversion.window_pipeline import (
+    FftRequest,
+    MetricDefinition,
+    WindowPlan,
 )
 
 # ---------------------------------------------------------------------------
@@ -73,8 +95,7 @@ def _parseval_rms(
     # Nyquist) are doubled to account for the missing negative freqs.
     # Our LFP and AP masks never include DC or Nyquist, so all
     # selected bins get the 2x factor.
-    power = np.sum(np.abs(X[freq_mask]) ** 2, axis=0)
-    return np.sqrt(2.0 * power / n_samples**2)
+    return parseval_rms(X, freq_mask, n_samples)
 
 
 def _normalize_spectral_estimates(
@@ -137,7 +158,7 @@ def _normalize_spectral_estimates(
     return psd_power, psd_freqs, correlation, complex_coherency
 
 
-def _compute_all_metrics(  # noqa: C901
+def _compute_all_metrics(
     block: ExperimentBlock,
     window_interval: float = 30.0,
     window_duration: float = 4.0,
@@ -146,12 +167,15 @@ def _compute_all_metrics(  # noqa: C901
     lfp_freq_range: tuple[float, float] = (1.0, 300.0),
     bands: dict[str, tuple[float, float]] | None = None,
     min_coherency_windows: int = 20,
+    extra_metrics: tuple[WindowMetric, ...] = (),
+    block_id: str | None = None,
+    main_recording_min_secs: float = 600.0,
 ) -> BlockMetrics:
     """Compute all ephys metrics from sparse windows.
 
-    For each window: read raw data, compute AP RMS from a short
-    FFT at full sample rate, decimate to LFP rate, then compute
-    LFP RMS + PSD + cross-spectral density for coherency.
+    NP1 uses independent AP and LFP sources. NP2 uses one wideband source
+    and shares its referenced FFT across spectral consumers. Opt-in raw
+    consumers run independently within the same sparse read schedule.
 
     Parameters
     ----------
@@ -172,11 +196,16 @@ def _compute_all_metrics(  # noqa: C901
         ``(low, high)`` frequency edges for the LFP band.
     bands : dict or None
         Frequency bands for coherency.  Defaults to COHERENCE_BANDS.
-    max_duration : float or None
-        If set, limit windows to this duration (for combined RMS).
     min_coherency_windows : int
         Minimum number of windows for coherency estimation.
+    extra_metrics : tuple[WindowMetric, ...]
+        Opt-in configurations resolved against the immutable block context.
+    block_id : str or None
+        Unique identity within extraction; standalone calls generate an ID.
+    main_recording_min_secs : float
+        Duration fallback used when block provenance is not explicit.
     """
+    validate_metrics(extra_metrics)
     recording = block.recording
     lfp_recording = block.lfp_recording
     if bands is None:
@@ -200,7 +229,6 @@ def _compute_all_metrics(  # noqa: C901
         n_windows = 1
         window_starts_sec = np.array([0.0])
     window_samples = int(window_duration * fs)
-    window_starts = (window_starts_sec * fs).astype(int)
     timestamps = window_starts_sec + window_duration / 2.0
 
     # Determine LFP source and its sample rate
@@ -223,7 +251,6 @@ def _compute_all_metrics(  # noqa: C901
     lfp_mask = (lfp_freqs >= lfp_freq_range[0]) & (
         lfp_freqs <= lfp_freq_range[1]
     )
-    n_lfp_psd_bins = int(lfp_mask.sum())
 
     # Build band masks
     band_masks = {}
@@ -255,28 +282,103 @@ def _compute_all_metrics(  # noqa: C901
             "depth_order": depth_order,
         }
 
-    n_ap_channels = recording.get_num_channels()
     n_lfp_channels = lfp_src.get_num_channels()
 
-    # Output arrays
-    rms_ap = np.zeros((n_windows, n_ap_channels), dtype=np.float32)
-    rms_lfp = np.zeros((n_windows, n_lfp_channels), dtype=np.float32)
-
-    # Accumulators for PSD and cross-spectral density
-    Sij = {
-        band_name: np.zeros(
-            (n_lfp_channels, n_lfp_channels), dtype=np.complex128
-        )
-        for band_name in bands
-    }
-    psd_accum = np.zeros((n_lfp_psd_bins, n_lfp_channels), dtype=np.float64)
+    lfp_request = FftRequest(
+        "lfp",
+        lfp_window_samples,
+        reference="median",
+        demean=True,
+        taper="hann",
+    )
+    ap_request = (
+        FftRequest("ap", ap_samples)
+        if lfp_recording is not None
+        else lfp_request
+    )
+    ap_fft_samples = (
+        ap_samples if lfp_recording is not None else lfp_window_samples
+    )
+    ap_context = SourceContext.from_recording(
+        recording, window_samples, window_starts_sec
+    )
+    context = BlockContext(
+        block_index=block.block_index,
+        block_source=block_source(block, main_recording_min_secs),
+        duration_seconds=float(duration_total),
+        window_starts_seconds=metadata_array(window_starts_sec),
+        timestamps=metadata_array(timestamps),
+        ap=ap_context,
+        lfp=(
+            SourceContext.from_recording(
+                lfp_src, lfp_window_samples, window_starts_sec
+            )
+            if lfp_recording is not None
+            else ap_context
+        ),
+        ap_fft=ap_request,
+        lfp_fft=lfp_request,
+        lfp_window_power=float(window_power),
+        block_id=block_id if block_id is not None else str(uuid4()),
+    )
+    definitions = (
+        MetricDefinition(
+            "rms_ap",
+            (context.ap_fft,),
+            partial(
+                RmsAccumulator,
+                context.n_windows,
+                context.ap.n_channels,
+                ap_mask,
+                ap_fft_samples,
+                1.0 if lfp_recording is not None else rms_correction,
+            ),
+        ),
+        MetricDefinition(
+            "rms_lfp",
+            (context.lfp_fft,),
+            partial(
+                RmsAccumulator,
+                context.n_windows,
+                context.lfp.n_channels,
+                lfp_mask,
+                lfp_window_samples,
+                rms_correction,
+            ),
+        ),
+        MetricDefinition(
+            "psd",
+            (context.lfp_fft,),
+            partial(PsdAccumulator, lfp_mask, n_lfp_channels),
+        ),
+        MetricDefinition(
+            "cross_power",
+            (context.lfp_fft,),
+            partial(CrossSpectralAccumulator, band_masks, n_lfp_channels),
+        ),
+    )
+    extensions = tuple(metric.define(context) for metric in extra_metrics)
+    if any(
+        metric.name != definition.name
+        for metric, definition in zip(extra_metrics, extensions, strict=True)
+    ):
+        raise ValueError("Metric registration and definition names differ")
+    plan = WindowPlan(
+        definitions + extensions,
+        n_windows=context.n_windows,
+        source_samples={
+            "ap": context.ap.read_samples,
+            "lfp": context.lfp.read_samples,
+        },
+        separate_lfp=context.separate_lfp,
+    )
 
     # --- Main loop: submit all reads, process as completed ---
     n_read_workers = min(8, n_windows)
 
     def _read_window(idx: int) -> tuple[int, np.ndarray, np.ndarray | None]:
         """Read AP (or wideband) + LFP windows for one index."""
-        s = int(window_starts[idx])
+        s = int(context.ap.window_starts[idx])
         ap_data = recording.get_traces(
             start_frame=s,
             end_frame=s + window_samples,
@@ -284,11 +386,8 @@ def _compute_all_metrics(  # noqa: C901
         )
         lfp_data = None
         if lfp_recording is not None:
-            s_lfp = int(window_starts_sec[idx] * fs_lfp)
-            e_lfp = s_lfp + lfp_window_samples
-            if e_lfp > lfp_src.get_num_samples():
-                e_lfp = lfp_src.get_num_samples()
-                s_lfp = max(0, e_lfp - lfp_window_samples)
+            s_lfp = int(context.lfp.window_starts[idx])
+            e_lfp = s_lfp + context.lfp.read_samples
             lfp_data = lfp_src.get_traces(
                 start_frame=s_lfp,
                 end_frame=e_lfp,
@@ -318,45 +417,13 @@ def _compute_all_metrics(  # noqa: C901
             _submit_up_to(n_read_workers)
 
             i, raw_data, lfp_data = done.result()
-            raw = raw_data.astype(np.float32)
+            plan.consume(i, raw_data, lfp_data)
 
-            if lfp_data is not None:
-                # --- 1.0: separate AP and LFP recordings ---
-                X_ap = scipy.fft.rfft(raw[:ap_samples], axis=0)
-                rms_ap[i] = _parseval_rms(X_ap, ap_mask, ap_samples)
-                lfp_raw = lfp_data.astype(np.float32)
-            else:
-                # --- 2.0: wideband ---
-                lfp_raw = raw
-
-            # Common-median reference + demean + Hann -> one FFT.
-            np.subtract(
-                lfp_raw,
-                np.median(lfp_raw, axis=1, keepdims=True),
-                out=lfp_raw,
-            )
-            lfp_seg = lfp_raw[: hann.shape[0]]
-            np.subtract(lfp_seg, lfp_seg.mean(axis=0), out=lfp_seg)
-            np.multiply(lfp_seg, hann[:, None], out=lfp_seg)
-            X = scipy.fft.rfft(lfp_seg, axis=0)
-
-            # RMS via Parseval (corrected for Hann window)
-            rms_lfp[i] = (
-                _parseval_rms(X, lfp_mask, hann.shape[0]) * rms_correction
-            )
-            if lfp_recording is None:
-                rms_ap[i] = (
-                    _parseval_rms(X, ap_mask, hann.shape[0]) * rms_correction
-                )
-
-            # PSD accumulation (LFP range only)
-            psd_accum += np.abs(X[lfp_mask]) ** 2
-
-            # Cross-spectral density per band
-            for band_name, mask in band_masks.items():
-                X_band = X[mask]
-                Sij[band_name] += X_band.conj().T @ X_band
-
+    metric_results = plan.finish()
+    rms_ap = metric_results.pop("rms_ap")
+    rms_lfp = metric_results.pop("rms_lfp")
+    psd_accum = metric_results.pop("psd")
+    Sij = metric_results.pop("cross_power")
     psd_power, psd_freqs, correlation, complex_coherency = (
         _normalize_spectral_estimates(
             Sij,
@@ -396,6 +463,9 @@ def _compute_all_metrics(  # noqa: C901
         psd_power=psd_power * uV_to_V**2,  # PSD is power (V²/Hz)
         psd_freqs=psd_freqs,
         shank_channels=shank_channels,
+        metric_results=metric_results,
+        metric_stats=plan.stats,
+        metric_context=context,
     )
 
 
