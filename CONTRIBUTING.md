@@ -133,8 +133,8 @@ Open Ephys stream IDs follow
   `metrics.COHERENCE_BANDS`.
 - **Legacy waveform compatibility**: `_load_analyzer()` delegates legacy
   folders to SpikeInterface's waveform loader. The additional deprecated
-  metric-name patch exists on `fix/si-deprecated-template-metrics` and its
-  backup, and is absent from main; see the branch map below.
+  metric-name patch exists on `fix/si-deprecated-template-metrics` and is
+  absent from main; see the branch map below.
 - **Auto-adjusted window interval**: `extract_continuous` shortens
   `rms_window_interval` for short recordings to guarantee at least 20
   windows (needed for coherence statistics).
@@ -178,27 +178,34 @@ Open Ephys stream IDs follow
 
 ## Development branch map
 
-Audited against main at `09153d2` on 2026-10-21. Branch names below describe
-local refs; an absent merge commit does not establish that their work is
-missing. Several changes were squashed or cherry-picked under new hashes.
+Audited and cleaned against main at `09153d2` on 2026-10-21. An absent merge
+commit does not establish that work is missing: several changes were squashed
+or cherry-picked under new hashes. Remote branches were not deleted.
 
 ### Current feature work
 
 | Branch | Meaning and next step |
 | --- | --- |
 | `main` | Contains the sampled metric API (`685f3cd`), dependency reduction (`b954978`), and revised execution guide (`74179f7`). Start new work here. |
-| `feat/sampled-metric-api` | Old API staging branch. Its two commits (`6926e6a`, `264d006`) are patch-equivalent to commits on main (`git cherry main feat/sampled-metric-api` marks both `-`). No feature remains to port. |
-| `feat/brain-surface-lines` | Original detector at `09976dd`, based before the API. `experiment/metric-pipeline` points to the same commit. Use the port on `feat/brain-surface-lines-main` for the current API; see [usage](docs/brain_surface_lines.md). |
+| `feat/brain-surface-lines-main` | Port onto main's sampled API, including contact mapping and regression tests. Ready for real-data testing and integration; see [usage](docs/brain_surface_lines.md). Candidates still need calibration and downstream GUI integration. |
+| `feat/brain-surface-lines` | Original detector at `09976dd`, retained as the reference for testing the port. |
 | `feat/raw-activity-api` | Raw activity adapted to the sampled API, at `91e44a0`; checked out in the sibling `raw-activity-worktree`. This contains work beyond main. |
 | `experiment/raw-activity-detector-corrections` | Follow-up detector corrections at `8713500`, branching from the activity implementation at `ea025eb`. This is a separate development line from the later activity documentation commit. |
+| `fix/si-deprecated-template-metrics` | Unmerged compatibility patch for deprecated metric names in legacy waveform folders. The local branch is behind its remote counterpart by three formatting/docstring commits. Evaluate against current SpikeInterface before porting. |
+| `origin/fix/legacy-data-compat` | Remote-only fix at `1707c35` for legacy curated sorting metadata, including absent quality metrics and decoder labels. Separate from the deprecated metric-name patch; not present on main. |
+
+Two older proposals retain unique history and need a separate review:
+`update-packaging` contains an earlier template migration, largely superseded
+by current infrastructure; `yb-flexible-recording-number` adds explicit
+recording-number selection and last-segment selection. Main automatically
+discovers analyzer names and retains the longest recording segment, so the
+latter branch includes policy differences, not just an old duplicate fix.
 
 ### Archives
 
 | Branch | What it preserves | Assessment |
 | --- | --- | --- |
-| `archive/agent-refactor` (`68b38fa`) | Early split of `ephys.py` into types, I/O, metrics, spikes, and recording utilities. | Superseded by the later module split (`541fa42`) and unified FFT rewrite. Main has that architecture. Keep as historical reference; merging this old snapshot would not help. |
 | `archive/metric-prototype-with-detectors` (`f94446f`) | One preservation commit on top of `09976dd`: combined metric API, activity detector, surface detector, design review, numerical fixtures, and six benchmark JSON reports. | Contains unique experimental evidence and older detector implementations. The API was subsequently separated and landed on main; activity and surface features now have dedicated branches. Retain until those ports and benchmark records are accounted for. |
-| `archive/pending-python-ci` (`f9e08e4`) | A single commit on top of the old API staging tip `264d006`, proposing Python 3.11/3.13 in place of 3.10/3.13. | The CI change is still absent from audited main. Review that single commit independently of its already-landed API ancestors. This commit is also reachable through `archive/pre-api-main-drafts`. |
 | `archive/pre-api-main-drafts` (`ff5f8e9`) | Child of `f9e08e4`: earlier execution/dependency prose plus a saved Zarr SortingAnalyzer extension reload test in `tests/test_spikes.py`. | Main contains revised documentation, but the reload test and CI proposal remain unique. Its execution guide predates the API and incorrectly describes the current pipeline as lacking configurable metrics. Do not merge the whole archive. |
 
 The October 16 archives were explicitly created to preserve experiments and
@@ -206,18 +213,34 @@ uncommitted drafts while separating the sampled API from detector work. Their
 large diffs against the merge base include earlier versions of work now on
 main, so those diff sizes overstate the amount of missing implementation.
 
-### Backups
+### Historical backup
 
-| Branch | Assessment |
-| --- | --- |
-| `backup/feat-simplify-data-access-pre-squash` (`820509d`) | Detailed development history before the unified FFT squash. Its final tree differs from `feat/simplify-data-access` (`8d68596`) only by `REFACTOR.md`; it preserves history and a plan, rather than a separate runtime feature. |
-| `backup/fix-si-deprecated-template-metrics` (`cfd1582`) | Earlier version of the legacy waveform metric-name compatibility fix. The later remote branch (`origin/fix/si-deprecated-template-metrics`, `404748d`) differs only in `spikes.py` formatting, a docstring, and log expression construction. Main's `_load_analyzer()` delegates to SpikeInterface and does not contain this patch, despite the older development guide claiming it did. The backup is redundant with the later fix branch for runtime behavior, but that fix itself remains separate work to evaluate. |
+`backup/feat-simplify-data-access-pre-squash` (`820509d`) retains detailed
+development history and `REFACTOR.md`. Its runtime tree matches the unified
+FFT squash (`ba9a482`) already on main. There is no active feature to port;
+the branch preserves history that would otherwise lose its named reference.
+
+### Removed local branches
+
+| Branch | Former tip | Reason |
+| --- | --- | --- |
+| `archive/agent-refactor` | `68b38fa` | Superseded module split and FFT architecture. |
+| `archive/pending-python-ci` | `f9e08e4` | Commit remains reachable through `archive/pre-api-main-drafts`. |
+| `backup/fix-si-deprecated-template-metrics` | `cfd1582` | Ancestor of the retained compatibility fix branch. |
+| `feat/sampled-metric-api` | `264d006` | Both staging commits are patch-equivalent to commits on main. |
+| `experiment/metric-pipeline` | `09976dd` | Exact duplicate of `feat/brain-surface-lines`. |
+| `feat/ephys-geometry-contract` | `720c18c` | Merged into main. |
+| `fix/deprecated-waveforms-loader` | `ba9a482` | Merged into main. |
+| `docs/readme-claude-and-copier-update` | `42c5889` | Both commits are patch-equivalent to commits on main. |
+| `fix/constrain-parallelism` | `2e128d1` | Adjusted the removed filter pipeline; the FFT pipeline budgets workers directly. |
+| `fix/spike-interface-104` | `5aa164a` | Adjusted removed filter code/tests; main already requires SpikeInterface >=0.104. |
+| `feat/simplify-data-access` | `8d68596` | Exact tree match to `ba9a482`, already on main. |
 
 Use `git show <commit>` for a preservation commit and `git diff main <branch>
 -- <path>` to inspect the current content difference. Use `git cherry` to
 detect equivalent patches; ahead/behind counts alone cannot identify work
-that landed with different commit hashes. No archive or backup refs were
-deleted during this audit.
+that landed with different commit hashes. The table above records the local
+branch cleanup; retained archives still contain the identified unique work.
 
 ## Related packages
 
