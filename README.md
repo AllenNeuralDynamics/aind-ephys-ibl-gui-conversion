@@ -144,8 +144,15 @@ format.
 | `clusters.channels.npy` | (n_clusters,) | Peak channel per cluster |
 | `clusters.peakToTrough.npy` | (n_clusters,) | Peak-to-trough duration (samples) |
 | `clusters.waveforms.npy` | (n_clusters, n_samples, n_channels) | Mean waveforms |
-| `clusters.metrics.csv` | -- | SpikeInterface quality metrics |
+| `clusters.metrics.csv` | -- | SpikeInterface quality metrics, QC and classification labels |
 | `unit_shank_indices.npy` | (n_clusters,) | 0-based shank index per cluster |
+
+QC and classification labels come from the analyzer's sorting properties.
+If either label is missing, conversion also checks the matching folder under
+`curated/`. Analyzer labels take precedence, and a missing curated folder is
+allowed. A loaded curated sorting must have the same unit IDs in the same
+order. `decoder_label` takes precedence over `unitrefine_label` within each
+source; classification is written to the `unitrefine_label` CSV column.
 
 ### From `extract_continuous`
 
