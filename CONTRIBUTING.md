@@ -165,6 +165,9 @@ Open Ephys stream IDs follow
 
 ## Dependencies
 
+The package supports Python 3.10 and newer. CI tests Python 3.10 and 3.13;
+keep the oldest tested version aligned with `requires-python`.
+
 - **spikeinterface[metrics]** >= 0.104.0 -- Recording/Sorting abstractions,
   SortingAnalyzer, and quality metrics. The converter uses the `metrics` extra;
   the `full` extra also installs unused CUDA, sorting, and visualization
@@ -214,7 +217,7 @@ latter branch includes policy differences, not just an old duplicate fix.
 | Branch | What it preserves | Assessment |
 | --- | --- | --- |
 | `archive/metric-prototype-with-detectors` (`f94446f`) | One preservation commit on top of `09976dd`: combined metric API, activity detector, surface detector, design review, numerical fixtures, and six benchmark JSON reports. | Contains unique experimental evidence and older detector implementations. The API was subsequently separated and landed on main; activity and surface features now have dedicated branches. Retain until those ports and benchmark records are accounted for. |
-| `archive/pre-api-main-drafts` (`ff5f8e9`) | Child of `f9e08e4`: earlier execution/dependency prose plus a saved Zarr SortingAnalyzer extension reload test in `tests/test_spikes.py`. | Main contains revised documentation, but the reload test and CI proposal remain unique. The CI proposal changes only the test matrix from Python 3.10/3.13 to 3.11/3.13, leaving `requires-python >=3.10` unchanged; it was saved from uncommitted changes under Galen's name on October 16. Its execution guide predates the API and incorrectly describes the current pipeline as lacking configurable metrics. Do not merge the whole archive. |
+| `archive/pre-api-main-drafts` (`ff5f8e9`) | Child of `f9e08e4`: earlier execution/dependency prose plus a saved Zarr SortingAnalyzer extension reload test in `tests/test_spikes.py`. | The reload test remains unique. The Python 3.11/3.13 CI proposal was explicitly discarded on October 21: retain Python 3.10 in CI while the package supports it. Its execution guide predates the API and incorrectly describes the current pipeline as lacking configurable metrics. Do not merge the whole archive. |
 
 The October 16 archives were explicitly created to preserve experiments and
 uncommitted drafts while separating the sampled API from detector work. Their
