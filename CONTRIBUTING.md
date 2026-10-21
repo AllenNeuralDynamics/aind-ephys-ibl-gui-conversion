@@ -132,9 +132,11 @@ Open Ephys stream IDs follow
 - **Coherence bands**: `delta, theta, alpha, beta, gamma` defined in
   `metrics.COHERENCE_BANDS`.
 - **Legacy waveform compatibility**: `_load_analyzer()` delegates legacy
-  folders to SpikeInterface's waveform loader. The additional deprecated
-  metric-name patch exists on `fix/si-deprecated-template-metrics` and is
-  absent from main; see the branch map below.
+  folders to SpikeInterface's waveform loader. The locked SpikeInterface
+  0.105.3 includes the upstream load-order fix (SpikeInterface PR #4509).
+  Converter PR #34's deprecated metric-name workaround was closed as
+  unnecessary; it should not be restored. The declared minimum of 0.104.0
+  still permits older installations and is separate from the lockfile.
 - **Auto-adjusted window interval**: `extract_continuous` shortens
   `rms_window_interval` for short recordings to guarantee at least 20
   windows (needed for coherence statistics).
@@ -190,9 +192,15 @@ or cherry-picked under new hashes. Remote branches were not deleted.
 | `feat/brain-surface-lines-main` | Port onto main's sampled API, including contact mapping and regression tests. Ready for real-data testing and integration; see [usage](docs/brain_surface_lines.md). Candidates still need calibration and downstream GUI integration. |
 | `feat/brain-surface-lines` | Original detector at `09976dd`, retained as the reference for testing the port. |
 | `feat/raw-activity-api` | Raw activity adapted to the sampled API, at `91e44a0`; checked out in the sibling `raw-activity-worktree`. This contains work beyond main. |
-| `experiment/raw-activity-detector-corrections` | Follow-up detector corrections at `8713500`, branching from the activity implementation at `ea025eb`. This is a separate development line from the later activity documentation commit. |
-| `fix/si-deprecated-template-metrics` | Unmerged compatibility patch for deprecated metric names in legacy waveform folders. The local branch is behind its remote counterpart by three formatting/docstring commits. Evaluate against current SpikeInterface before porting. |
-| `origin/fix/legacy-data-compat` | Remote-only fix at `1707c35` for legacy curated sorting metadata, including absent quality metrics and decoder labels. Separate from the deprecated metric-name patch; not present on main. |
+| `experiment/raw-activity-detector-corrections` | Follow-up detector corrections at `8713500`, branching from the activity implementation at `ea025eb`: physical neighborhoods prevent distant banks supporting each other, flat peaks count once, and eligible events obey the full refractory interval. This is a separate development line from the later activity documentation commit. |
+| `origin/legacy-data-compat` / `origin/fix/legacy-data-compat` | Ben Hardcastle's open [PR #45](https://github.com/AllenNeuralDynamics/aind-ephys-ibl-gui-conversion/pull/45) targets the older `legacy-data-compat` branch (`3492a0b`). The newer `fix/legacy-data-compat` commit (`1707c35`) uses current loader helpers and explicit property precedence. Both recover QC and decoder labels from curated sorting objects when absent on the analyzer. They still require the quality-metrics extension. Port with coverage for absent curated folders and mismatched units; the older PR also uses Boolean `or` on NumPy arrays, which can fail. |
+
+Arjun Sridhar opened [PR #34](https://github.com/AllenNeuralDynamics/aind-ephys-ibl-gui-conversion/pull/34)
+for deprecated metric names. It was closed on 2026-04-15 because
+[SpikeInterface PR #4509](https://github.com/SpikeInterface/spikeinterface/pull/4509)
+fixed the underlying load order. The locked installation runs compatibility
+migration before metric validation. The old monkey-patch is obsolete for that
+installation; the remote branch remains historical.
 
 Two older proposals retain unique history and need a separate review:
 `update-packaging` contains an earlier template migration, largely superseded
@@ -206,7 +214,7 @@ latter branch includes policy differences, not just an old duplicate fix.
 | Branch | What it preserves | Assessment |
 | --- | --- | --- |
 | `archive/metric-prototype-with-detectors` (`f94446f`) | One preservation commit on top of `09976dd`: combined metric API, activity detector, surface detector, design review, numerical fixtures, and six benchmark JSON reports. | Contains unique experimental evidence and older detector implementations. The API was subsequently separated and landed on main; activity and surface features now have dedicated branches. Retain until those ports and benchmark records are accounted for. |
-| `archive/pre-api-main-drafts` (`ff5f8e9`) | Child of `f9e08e4`: earlier execution/dependency prose plus a saved Zarr SortingAnalyzer extension reload test in `tests/test_spikes.py`. | Main contains revised documentation, but the reload test and CI proposal remain unique. Its execution guide predates the API and incorrectly describes the current pipeline as lacking configurable metrics. Do not merge the whole archive. |
+| `archive/pre-api-main-drafts` (`ff5f8e9`) | Child of `f9e08e4`: earlier execution/dependency prose plus a saved Zarr SortingAnalyzer extension reload test in `tests/test_spikes.py`. | Main contains revised documentation, but the reload test and CI proposal remain unique. The CI proposal changes only the test matrix from Python 3.10/3.13 to 3.11/3.13, leaving `requires-python >=3.10` unchanged; it was saved from uncommitted changes under Galen's name on October 16. Its execution guide predates the API and incorrectly describes the current pipeline as lacking configurable metrics. Do not merge the whole archive. |
 
 The October 16 archives were explicitly created to preserve experiments and
 uncommitted drafts while separating the sampled API from detector work. Their
@@ -235,6 +243,7 @@ the branch preserves history that would otherwise lose its named reference.
 | `fix/constrain-parallelism` | `2e128d1` | Adjusted the removed filter pipeline; the FFT pipeline budgets workers directly. |
 | `fix/spike-interface-104` | `5aa164a` | Adjusted removed filter code/tests; main already requires SpikeInterface >=0.104. |
 | `feat/simplify-data-access` | `8d68596` | Exact tree match to `ba9a482`, already on main. |
+| `fix/si-deprecated-template-metrics` | `2f27e26` | PR #34 was closed after the upstream fix; locked SpikeInterface 0.105.3 contains that fix. Full branch history remains on the remote. |
 
 Use `git show <commit>` for a preservation commit and `git diff main <branch>
 -- <path>` to inspect the current content difference. Use `git cherry` to
