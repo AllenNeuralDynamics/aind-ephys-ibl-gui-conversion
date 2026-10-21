@@ -205,11 +205,9 @@ fixed the underlying load order. The locked installation runs compatibility
 migration before metric validation. The old monkey-patch is obsolete for that
 installation; the remote branch remains historical.
 
-The older `yb-flexible-recording-number` proposal needs a separate review:
-it adds explicit recording-number selection and last-segment selection.
-Main automatically
-discovers analyzer names and retains the longest recording segment, so the
-latter branch includes policy differences, not just an old duplicate fix.
+The `yb-flexible-recording-number` proposal was explicitly discarded on
+October 21. Main continues to discover analyzer names automatically and
+retain the longest recording segment.
 
 ### Archives
 
@@ -247,6 +245,7 @@ the branch preserves history that would otherwise lose its named reference.
 | `feat/simplify-data-access` | `8d68596` | Exact tree match to `ba9a482`, already on main. |
 | `fix/si-deprecated-template-metrics` | `2f27e26` | PR #34 was closed after the upstream fix; locked SpikeInterface 0.105.3 contains that fix. Full branch history remains on the remote. |
 | `update-packaging` | `f85af1c` | Exact tree match to the squash merge `9af1263` from PR #28, merged February 25 Pacific time. No remaining changes to port. |
+| `yb-flexible-recording-number` | `57b8da4` | Explicitly discarded; keep main's automatic analyzer discovery and longest-segment policy. |
 
 Use `git show <commit>` for a preservation commit and `git diff main <branch>
 -- <path>` to inspect the current content difference. Use `git cherry` to
