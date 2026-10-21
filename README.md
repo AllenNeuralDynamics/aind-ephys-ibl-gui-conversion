@@ -80,6 +80,8 @@ per-band RMS, PSD, and coherence files in IBL ALF format.
 | `rms_window_interval` | `30.0` | Gap between analysis windows (s); auto-shortened on short recordings to guarantee >= 20 windows |
 | `rms_window_duration` | `4.0` | Length of each analysis window (s) |
 | `num_parallel_jobs` | `4` | Concurrent block processing |
+| `coherence_block_source` | `"all"` | Blocks contributing to correlation/coherency: `"all"`, `"main"`, or `"surface"`. PSD, RMS, and channel metadata still use all blocks. |
+| `extra_metrics` | `()` | Optional [metric extensions](docs/metric_extensions.md) sharing the existing sampled reads and FFTs |
 
 Coherence bands (from `metrics.COHERENCE_BANDS`):
 
@@ -146,27 +148,42 @@ format.
 
 | File | Description |
 |------|-------------|
-| `_iblqc_ephysTimeRmsAP.rms.npy` (`*Main*` if multi-block) | AP-band RMS time series, shape (n_windows, n_channels) |
+| `_iblqc_ephysTimeRmsAP.rms.npy` (`*Main*` if multi-block) | AP-band RMS time series, shape (n_windows, n_channel_table_rows); rows the block did not record are `NaN` |
 | `_iblqc_ephysTimeRmsAP.timestamps.npy` | Window centers (s) |
 | `_iblqc_ephysTimeRmsLF*.rms.npy` | LFP-band RMS time series |
 | `_iblqc_ephysTimeRmsLF*.timestamps.npy` | Window centers (s) |
 | `_iblqc_ephysSpectralDensityLF.power.npy` | PSD (V^2/Hz), shape (n_freqs, n_channels) |
 | `_iblqc_ephysSpectralDensityLF.freqs.npy` | Frequencies (Hz) |
-| `band_corr/<band>_shank<i>_mean_corr.npy` | Per-band, per-shank correlation matrices (real, power-normalized) |
-| `band_corr/<band>_shank<i>_coherency.npy` | Per-band, per-shank complex coherency |
-| `band_corr/channel_blocks.json` | Multi-block channel map (only if surface-finding blocks are present) |
+| `band_corr/<band>_mean_corr.npy` | Full per-band correlation matrix in channel-table row order |
+| `band_corr/<band>_coherency.npy` | Full per-band complex coherency matrix in channel-table row order |
+| `band_corr/<band>_shank<i>_mean_corr.npy` | Per-shank compatibility view sliced from the full matrix |
+| `band_corr/<band>_shank<i>_coherency.npy` | Per-shank compatibility view sliced from the full matrix |
+| `band_corr/row_channels.json` | Matrix row-to-channel table map (always written) |
+| `band_corr/channel_blocks.json` | Legacy multi-block channel map (only if surface-finding blocks are present) |
 | `channels.localCoordinates.npy` | Unique channel positions (x, y) |
-| `channels.rawInd.npy` | Channel indices |
+| `channels.rawInd.npy` | Legacy positional channel indices |
+| `channels.shankInd.npy` | Zero-based producer shank ID per channel-table row; physical IDs may be sparse |
+| `channels.contactId.npy` | Physical contact ID per channel-table row; empty string when unavailable |
 | `_iblqc_metrics.method.json` | Method metadata (FFT params, CMR flag) |
 
 ## Metrics method
+
+For the directory boundary shared with preprocessing and the GUI, channel
+identity, shank derivation, matrix row maps, and split-stream examples, read
+[the ephys collection contract](docs/shank_channel_metadata_spec.md).
+The datapackage references the collection directory, not individual QC files.
+Keep ALF objects at its root and correlation/coherency products in `band_corr/`.
 
 RMS and PSD are computed via FFT, not time-domain filtering:
 
 - Hann-windowed segments, Welch-style PSD
 - Band-limited RMS via Parseval's theorem (integrate PSD over each band)
 - AP band: > 300 Hz (neural noise); LFP band: 1 -- 300 Hz
-- Common-mode rejection (CMR) is applied
+- Across-channel common-median referencing is applied.
+- Correlation and coherency combine all blocks by default. Set
+  `coherence_block_source="surface"` to exclude main-recording artifacts while
+  retaining surface-finding blocks; explicit asset provenance takes precedence
+  over the legacy duration heuristic.
 
 ## Adapting to your own data
 
@@ -195,27 +212,8 @@ will work with any IBL GUI consumer.
 
 ## Development
 
-Set up the environment:
-
-```bash
-uv sync
-```
-
-Run the full check suite:
-
-```bash
-./scripts/run_linters_and_checks.sh -c
-```
-
-Or run individual checks:
-
-```bash
-uv run --frozen ruff format                          # Code formatting
-uv run --frozen ruff check                           # Linting
-uv run --frozen interrogate -v src                   # Docstring coverage (100% required)
-uv run --frozen codespell --check-filenames          # Spell checking
-uv run --frozen pytest --cov aind_ephys_ibl_gui_conversion  # Tests with coverage
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md) for developer setup, checks, and
+repository conventions. Coding agents should also read [AGENTS.md](AGENTS.md).
 
 ## License
 

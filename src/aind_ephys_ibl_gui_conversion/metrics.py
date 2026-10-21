@@ -1,14 +1,43 @@
 """FFT-based ephys metric computation."""
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import partial
+from typing import Literal
+from uuid import uuid4
 
 import numpy as np
 import scipy.fft
 
+from aind_ephys_ibl_gui_conversion.channel_metadata import (
+    build_channel_table,
+    depth_sorted_shank_rows,
+    normalized_channel_groups,
+)
+from aind_ephys_ibl_gui_conversion.metric_context import (
+    BlockContext,
+    SourceContext,
+    metadata_array,
+)
+from aind_ephys_ibl_gui_conversion.metric_extensions import (
+    WindowMetric,
+    validate_metrics,
+)
+from aind_ephys_ibl_gui_conversion.spectral_accumulators import (
+    CrossSpectralAccumulator,
+    PsdAccumulator,
+    RmsAccumulator,
+    parseval_rms,
+)
 from aind_ephys_ibl_gui_conversion.types import (
     BlockMetrics,
+    ChannelTable,
     ExperimentBlock,
     ShankChannels,
+)
+from aind_ephys_ibl_gui_conversion.window_pipeline import (
+    FftRequest,
+    MetricDefinition,
+    WindowPlan,
 )
 
 # ---------------------------------------------------------------------------
@@ -22,6 +51,18 @@ COHERENCE_BANDS: dict[str, tuple[float, float]] = {
     "beta": (30, 100),
     "gamma": (100, 300),
 }
+
+CoherenceBlockSource = Literal["all", "main", "surface"]
+
+
+def block_source(
+    block: ExperimentBlock,
+    main_recording_min_secs: float = 600.0,
+) -> Literal["main", "surface"]:
+    """Return explicit block provenance, with a duration fallback."""
+    if block.source is not None:
+        return block.source
+    return "main" if block.duration >= main_recording_min_secs else "surface"
 
 
 # ---------------------------------------------------------------------------
@@ -54,14 +95,12 @@ def _parseval_rms(
     # Nyquist) are doubled to account for the missing negative freqs.
     # Our LFP and AP masks never include DC or Nyquist, so all
     # selected bins get the 2x factor.
-    power = np.sum(np.abs(X[freq_mask]) ** 2, axis=0)
-    return np.sqrt(2.0 * power / n_samples**2)
+    return parseval_rms(X, freq_mask, n_samples)
 
 
 def _normalize_spectral_estimates(
     Sij: dict[str, np.ndarray],
     psd_accum: np.ndarray,
-    shank_info: dict,
     n_windows: int,
     window_power: float,
     fs_lfp: float,
@@ -77,8 +116,6 @@ def _normalize_spectral_estimates(
         Accumulated cross-spectral density per band.
     psd_accum : np.ndarray
         Accumulated PSD power, shape ``(n_lfp_bins, n_channels)``.
-    shank_info : dict
-        Per-shank channel indices and depth ordering.
     n_windows : int
         Number of FFT windows that were accumulated.
     window_power : float
@@ -107,30 +144,21 @@ def _normalize_spectral_estimates(
     psd_power = psd_full
     psd_freqs = lfp_freqs[lfp_mask].astype(np.float32)
 
-    # --- Normalize coherency per shank ---
+    # --- Normalize coherency over the full ephys collection ---
     correlation = {}
     complex_coherency = {}
     for band_name in bands:
         S = Sij[band_name] / n_windows
-        for group_val, info in shank_info.items():
-            idx = info["indices"]
-            order = info["depth_order"]
-            S_shank = S[np.ix_(idx[order], idx[order])]
-            d = np.sqrt(np.maximum(np.real(np.diag(S_shank)), 0.0))
-            d[d == 0] = 1.0
-            coherency = S_shank / np.outer(d, d)
-            shank_index = int(group_val) + 1
-            correlation[(band_name, shank_index)] = np.real(coherency).astype(
-                np.float32
-            )
-            complex_coherency[(band_name, shank_index)] = coherency.astype(
-                np.complex64
-            )
+        d = np.sqrt(np.maximum(np.real(np.diag(S)), 0.0))
+        d[d == 0] = 1.0
+        coherency = S / np.outer(d, d)
+        correlation[band_name] = np.real(coherency).astype(np.float32)
+        complex_coherency[band_name] = coherency.astype(np.complex64)
 
     return psd_power, psd_freqs, correlation, complex_coherency
 
 
-def _compute_all_metrics(  # noqa: C901
+def _compute_all_metrics(
     block: ExperimentBlock,
     window_interval: float = 30.0,
     window_duration: float = 4.0,
@@ -139,12 +167,15 @@ def _compute_all_metrics(  # noqa: C901
     lfp_freq_range: tuple[float, float] = (1.0, 300.0),
     bands: dict[str, tuple[float, float]] | None = None,
     min_coherency_windows: int = 20,
+    extra_metrics: tuple[WindowMetric, ...] = (),
+    block_id: str | None = None,
+    main_recording_min_secs: float = 600.0,
 ) -> BlockMetrics:
     """Compute all ephys metrics from sparse windows.
 
-    For each window: read raw data, compute AP RMS from a short
-    FFT at full sample rate, decimate to LFP rate, then compute
-    LFP RMS + PSD + cross-spectral density for coherency.
+    NP1 uses independent AP and LFP sources. NP2 uses one wideband source
+    and shares its referenced FFT across spectral consumers. Opt-in raw
+    consumers run independently within the same sparse read schedule.
 
     Parameters
     ----------
@@ -165,11 +196,16 @@ def _compute_all_metrics(  # noqa: C901
         ``(low, high)`` frequency edges for the LFP band.
     bands : dict or None
         Frequency bands for coherency.  Defaults to COHERENCE_BANDS.
-    max_duration : float or None
-        If set, limit windows to this duration (for combined RMS).
     min_coherency_windows : int
         Minimum number of windows for coherency estimation.
+    extra_metrics : tuple[WindowMetric, ...]
+        Opt-in configurations resolved against the immutable block context.
+    block_id : str or None
+        Unique identity within extraction; standalone calls generate an ID.
+    main_recording_min_secs : float
+        Duration fallback used when block provenance is not explicit.
     """
+    validate_metrics(extra_metrics)
     recording = block.recording
     lfp_recording = block.lfp_recording
     if bands is None:
@@ -193,7 +229,6 @@ def _compute_all_metrics(  # noqa: C901
         n_windows = 1
         window_starts_sec = np.array([0.0])
     window_samples = int(window_duration * fs)
-    window_starts = (window_starts_sec * fs).astype(int)
     timestamps = window_starts_sec + window_duration / 2.0
 
     # Determine LFP source and its sample rate
@@ -216,7 +251,6 @@ def _compute_all_metrics(  # noqa: C901
     lfp_mask = (lfp_freqs >= lfp_freq_range[0]) & (
         lfp_freqs <= lfp_freq_range[1]
     )
-    n_lfp_psd_bins = int(lfp_mask.sum())
 
     # Build band masks
     band_masks = {}
@@ -230,10 +264,7 @@ def _compute_all_metrics(  # noqa: C901
     rms_correction = np.sqrt(lfp_window_samples / window_power)
 
     # Channel group / shank info (from the LFP source)
-    try:
-        channel_groups = lfp_src.get_property("group")
-    except Exception:
-        channel_groups = np.zeros(lfp_src.get_num_channels(), dtype=int)
+    channel_groups = normalized_channel_groups(lfp_src)
     channel_locations = lfp_src.get_channel_locations()
     unique_groups = np.unique(channel_groups)
     shank_info = {}
@@ -241,34 +272,113 @@ def _compute_all_metrics(  # noqa: C901
         ch_mask = channel_groups == group_val
         ch_indices = np.where(ch_mask)[0]
         locs = channel_locations[ch_indices]
-        depth_order = np.argsort(locs[:, 1])
+        # Depth first, then lateral position. Probes with several contacts at
+        # one depth (e.g. NP2.0 two-column banks) would otherwise be ordered by
+        # whatever the recording channel order happens to be, so the column a
+        # given matrix row belongs to could flip from depth to depth.
+        depth_order = np.lexsort((locs[:, 0], locs[:, 1]))
         shank_info[group_val] = {
             "indices": ch_indices,
             "depth_order": depth_order,
         }
 
-    n_ap_channels = recording.get_num_channels()
     n_lfp_channels = lfp_src.get_num_channels()
 
-    # Output arrays
-    rms_ap = np.zeros((n_windows, n_ap_channels), dtype=np.float32)
-    rms_lfp = np.zeros((n_windows, n_lfp_channels), dtype=np.float32)
-
-    # Accumulators for PSD and cross-spectral density
-    Sij = {
-        band_name: np.zeros(
-            (n_lfp_channels, n_lfp_channels), dtype=np.complex128
-        )
-        for band_name in bands
-    }
-    psd_accum = np.zeros((n_lfp_psd_bins, n_lfp_channels), dtype=np.float64)
+    lfp_request = FftRequest(
+        "lfp",
+        lfp_window_samples,
+        reference="median",
+        demean=True,
+        taper="hann",
+    )
+    ap_request = (
+        FftRequest("ap", ap_samples)
+        if lfp_recording is not None
+        else lfp_request
+    )
+    ap_fft_samples = (
+        ap_samples if lfp_recording is not None else lfp_window_samples
+    )
+    ap_context = SourceContext.from_recording(
+        recording, window_samples, window_starts_sec
+    )
+    context = BlockContext(
+        block_index=block.block_index,
+        block_source=block_source(block, main_recording_min_secs),
+        duration_seconds=float(duration_total),
+        window_starts_seconds=metadata_array(window_starts_sec),
+        timestamps=metadata_array(timestamps),
+        ap=ap_context,
+        lfp=(
+            SourceContext.from_recording(
+                lfp_src, lfp_window_samples, window_starts_sec
+            )
+            if lfp_recording is not None
+            else ap_context
+        ),
+        ap_fft=ap_request,
+        lfp_fft=lfp_request,
+        lfp_window_power=float(window_power),
+        block_id=block_id if block_id is not None else str(uuid4()),
+    )
+    definitions = (
+        MetricDefinition(
+            "rms_ap",
+            (context.ap_fft,),
+            partial(
+                RmsAccumulator,
+                context.n_windows,
+                context.ap.n_channels,
+                ap_mask,
+                ap_fft_samples,
+                1.0 if lfp_recording is not None else rms_correction,
+            ),
+        ),
+        MetricDefinition(
+            "rms_lfp",
+            (context.lfp_fft,),
+            partial(
+                RmsAccumulator,
+                context.n_windows,
+                context.lfp.n_channels,
+                lfp_mask,
+                lfp_window_samples,
+                rms_correction,
+            ),
+        ),
+        MetricDefinition(
+            "psd",
+            (context.lfp_fft,),
+            partial(PsdAccumulator, lfp_mask, n_lfp_channels),
+        ),
+        MetricDefinition(
+            "cross_power",
+            (context.lfp_fft,),
+            partial(CrossSpectralAccumulator, band_masks, n_lfp_channels),
+        ),
+    )
+    extensions = tuple(metric.define(context) for metric in extra_metrics)
+    if any(
+        metric.name != definition.name
+        for metric, definition in zip(extra_metrics, extensions, strict=True)
+    ):
+        raise ValueError("Metric registration and definition names differ")
+    plan = WindowPlan(
+        definitions + extensions,
+        n_windows=context.n_windows,
+        source_samples={
+            "ap": context.ap.read_samples,
+            "lfp": context.lfp.read_samples,
+        },
+        separate_lfp=context.separate_lfp,
+    )
 
     # --- Main loop: submit all reads, process as completed ---
     n_read_workers = min(8, n_windows)
 
     def _read_window(idx: int) -> tuple[int, np.ndarray, np.ndarray | None]:
         """Read AP (or wideband) + LFP windows for one index."""
-        s = int(window_starts[idx])
+        s = int(context.ap.window_starts[idx])
         ap_data = recording.get_traces(
             start_frame=s,
             end_frame=s + window_samples,
@@ -276,11 +386,8 @@ def _compute_all_metrics(  # noqa: C901
         )
         lfp_data = None
         if lfp_recording is not None:
-            s_lfp = int(window_starts_sec[idx] * fs_lfp)
-            e_lfp = s_lfp + lfp_window_samples
-            if e_lfp > lfp_src.get_num_samples():
-                e_lfp = lfp_src.get_num_samples()
-                s_lfp = max(0, e_lfp - lfp_window_samples)
+            s_lfp = int(context.lfp.window_starts[idx])
+            e_lfp = s_lfp + context.lfp.read_samples
             lfp_data = lfp_src.get_traces(
                 start_frame=s_lfp,
                 end_frame=e_lfp,
@@ -310,50 +417,17 @@ def _compute_all_metrics(  # noqa: C901
             _submit_up_to(n_read_workers)
 
             i, raw_data, lfp_data = done.result()
-            raw = raw_data.astype(np.float32)
+            plan.consume(i, raw_data, lfp_data)
 
-            if lfp_data is not None:
-                # --- 1.0: separate AP and LFP recordings ---
-                X_ap = scipy.fft.rfft(raw[:ap_samples], axis=0)
-                rms_ap[i] = _parseval_rms(X_ap, ap_mask, ap_samples)
-                lfp_raw = lfp_data.astype(np.float32)
-            else:
-                # --- 2.0: wideband ---
-                lfp_raw = raw
-
-            # CMR + demean + Hann window -> single FFT
-            np.subtract(
-                lfp_raw,
-                np.median(lfp_raw, axis=1, keepdims=True),
-                out=lfp_raw,
-            )
-            lfp_seg = lfp_raw[: hann.shape[0]]
-            np.subtract(lfp_seg, lfp_seg.mean(axis=0), out=lfp_seg)
-            np.multiply(lfp_seg, hann[:, None], out=lfp_seg)
-            X = scipy.fft.rfft(lfp_seg, axis=0)
-
-            # RMS via Parseval (corrected for Hann window)
-            rms_lfp[i] = (
-                _parseval_rms(X, lfp_mask, hann.shape[0]) * rms_correction
-            )
-            if lfp_recording is None:
-                rms_ap[i] = (
-                    _parseval_rms(X, ap_mask, hann.shape[0]) * rms_correction
-                )
-
-            # PSD accumulation (LFP range only)
-            psd_accum += np.abs(X[lfp_mask]) ** 2
-
-            # Cross-spectral density per band
-            for band_name, mask in band_masks.items():
-                X_band = X[mask]
-                Sij[band_name] += X_band.conj().T @ X_band
-
+    metric_results = plan.finish()
+    rms_ap = metric_results.pop("rms_ap")
+    rms_lfp = metric_results.pop("rms_lfp")
+    psd_accum = metric_results.pop("psd")
+    Sij = metric_results.pop("cross_power")
     psd_power, psd_freqs, correlation, complex_coherency = (
         _normalize_spectral_estimates(
             Sij,
             psd_accum,
-            shank_info,
             n_windows,
             window_power,
             fs_lfp,
@@ -371,6 +445,7 @@ def _compute_all_metrics(  # noqa: C901
         shank_channels.append(
             ShankChannels(
                 shank_index=int(group_val) + 1,
+                channel_indices=idx[order].astype(np.int64, copy=True),
                 locations=channel_locations[idx[order]].copy(),
             )
         )
@@ -388,106 +463,93 @@ def _compute_all_metrics(  # noqa: C901
         psd_power=psd_power * uV_to_V**2,  # PSD is power (V²/Hz)
         psd_freqs=psd_freqs,
         shank_channels=shank_channels,
+        metric_results=metric_results,
+        metric_stats=plan.stats,
+        metric_context=context,
     )
 
 
 def _build_channel_maps(
     results: list[BlockMetrics],
-) -> tuple[np.ndarray, list[np.ndarray], int]:
+) -> tuple[ChannelTable, list[np.ndarray], int]:
     """Build channel index maps for combining blocks with overlapping channels.
 
     Returns
     -------
-    unique_locs : np.ndarray
-        Unique channel locations, shape ``(n_unique, 2)``.
+    channel_table : ChannelTable
+        Unique channel metadata in canonical table order.
     block_channel_maps : list[np.ndarray]
         Per-block arrays mapping each block channel to its index in
-        ``unique_locs``.
+        ``channel_table``.
     total_n_channels : int
         Number of unique channels.
     """
-    all_locs = []
-    for r in results:
-        all_locs.append(r.block.recording.get_channel_locations())
-    concat_locs = np.concatenate(all_locs, axis=0)
-
-    _, unique_idx = np.unique(concat_locs, axis=0, return_index=True)
-    unique_idx = np.sort(unique_idx)
-    unique_locs = concat_locs[unique_idx]
-    total_n_channels = len(unique_locs)
-
-    block_channel_maps = []
-    for locs in all_locs:
-        ch_map = np.empty(len(locs), dtype=int)
-        for i, loc in enumerate(locs):
-            matches = np.where(
-                np.all(np.abs(unique_locs - loc) < 1e-6, axis=1)
-            )[0]
-            ch_map[i] = matches[0] if len(matches) > 0 else i
-        block_channel_maps.append(ch_map)
-
-    return unique_locs, block_channel_maps, total_n_channels
+    recordings = [r.block.recording for r in results]
+    channel_table, block_channel_maps = build_channel_table(recordings)
+    return channel_table, block_channel_maps, len(channel_table.raw_ind)
 
 
-def _build_shank_channel_maps(
+def _build_row_channels_metadata(
     results: list[BlockMetrics],
-    shank_index: int,
-) -> tuple[list[np.ndarray | None], int]:
-    """Build per-shank channel maps for assembling coherence matrices.
-
-    Uses the ``ShankChannels`` metadata already stored on each
-    ``BlockMetrics`` (computed during ``_compute_all_metrics``),
-    avoiding any re-reading from recordings.
-
-    Returns
-    -------
-    shank_maps : list[np.ndarray | None]
-        Per-block arrays mapping each block's shank-channel row/col
-        to its index in the unified shank channel set.  ``None`` if
-        the block has no channels on this shank.
-    n_unique : int
-        Total unique channels on this shank across all blocks.
-    """
-    # Collect per-block shank locations from stored metadata
-    per_block_locs: list[np.ndarray | None] = []
-    for r in results:
-        match = [
-            sc for sc in r.shank_channels if sc.shank_index == shank_index
-        ]
-        per_block_locs.append(match[0].locations if match else None)
-
-    # Build unified unique locations for this shank
-    valid_locs = [loc for loc in per_block_locs if loc is not None]
-    if not valid_locs:
-        return [None] * len(results), 0
-    concat = np.concatenate(valid_locs, axis=0)
-    _, unique_idx = np.unique(concat, axis=0, return_index=True)
-    unique_idx = np.sort(unique_idx)
-    unique_shank_locs = concat[unique_idx]
-    n_unique = len(unique_shank_locs)
-
-    # Map each block's shank channels to unified indices
-    shank_maps: list[np.ndarray | None] = []
-    for locs in per_block_locs:
-        if locs is None:
-            shank_maps.append(None)
-            continue
-        ch_map = np.empty(len(locs), dtype=int)
-        for i, loc in enumerate(locs):
-            matches = np.where(
-                np.all(np.abs(unique_shank_locs - loc) < 1e-6, axis=1)
-            )[0]
-            ch_map[i] = matches[0]
-        shank_maps.append(ch_map)
-
-    return shank_maps, n_unique
+    block_channel_maps: list[np.ndarray],
+    channel_table: ChannelTable,
+    main_recording_min_secs: float = 600.0,
+) -> dict:
+    """Build the self-describing row map for saved full matrices."""
+    all_shanks = sorted(
+        {sc.shank_index for result in results for sc in result.shank_channels}
+    )
+    shanks = {}
+    for shank_index in all_shanks:
+        shank_ind = shank_index - 1
+        shank_rows = depth_sorted_shank_rows(channel_table, shank_ind)
+        block_entries = []
+        for block_idx, (result, block_map) in enumerate(
+            zip(results, block_channel_maps, strict=True)
+        ):
+            match = [
+                sc
+                for sc in result.shank_channels
+                if sc.shank_index == shank_index
+            ]
+            if not match:
+                continue
+            rec = result.block.recording
+            label = block_source(result.block, main_recording_min_secs)
+            rows = block_map[match[0].channel_indices].astype(int).tolist()
+            block_entries.append(
+                {
+                    "block_index": block_idx,
+                    "label": label,
+                    "rows": rows,
+                    "n_channels": len(rows),
+                    "duration_s": float(rec.get_duration()),
+                    # Aggregation weight for this block. Every per-row and
+                    # per-pair weight is derivable from these plus ``rows``.
+                    "n_windows": int(result.rms_ap.shape[0]),
+                }
+            )
+        shanks[str(shank_ind)] = {
+            "rows": shank_rows.astype(int).tolist(),
+            "legacy_file_index": shank_index,
+            "blocks": block_entries,
+        }
+    return {
+        "version": 3,
+        "matrix_rows": np.arange(
+            len(channel_table.raw_ind), dtype=int
+        ).tolist(),
+        "matrix_row_order": "channel_table",
+        "shanks": shanks,
+    }
 
 
 def _assemble_blockwise_coherence(
     results: list[BlockMetrics],
     main_recording_min_secs: float = 600.0,
+    coherence_block_source: CoherenceBlockSource = "all",
 ) -> dict:
-    """Assemble per-block coherence into block-diagonal matrices.
+    """Assemble per-block coherence into full channel-table matrices.
 
     Parameters
     ----------
@@ -495,6 +557,9 @@ def _assemble_blockwise_coherence(
         Per-block results from ``_compute_all_metrics``.
     main_recording_min_secs : float
         Duration threshold to classify blocks as main vs surface.
+    coherence_block_source : {"all", "main", "surface"}
+        Which block provenance contributes to correlation and coherency.
+        PSD and channel support continue to include every block.
 
     Returns
     -------
@@ -502,56 +567,51 @@ def _assemble_blockwise_coherence(
         ``correlation``, ``coherency``, ``psd_power``, ``psd_freqs``,
         ``channel_blocks``
     """
-    unique_locs, block_channel_maps, total_n_channels = _build_channel_maps(
+    channel_table, block_channel_maps, total_n_channels = _build_channel_maps(
         results
     )
-
-    # Find all band/shank keys and unique shank indices
-    all_keys = set()
-    all_shanks = set()
-    for result in results:
-        all_keys.update(result.correlation.keys())
-        all_shanks.update(s for _, s in result.correlation.keys())
-
-    # Build per-shank channel maps once
-    shank_maps_cache = {}
-    for shank_idx in all_shanks:
-        shank_maps_cache[shank_idx] = _build_shank_channel_maps(
-            results, shank_idx
+    coherence_result_ids = {
+        id(result)
+        for result in results
+        if coherence_block_source == "all"
+        or block_source(result.block, main_recording_min_secs)
+        == coherence_block_source
+    }
+    if not coherence_result_ids:
+        raise ValueError(
+            f"no {coherence_block_source!r} blocks are available for coherency"
         )
 
-    # Assemble per-shank with n_windows-weighted averaging for overlaps
+    # Assemble full matrices with n_windows-weighted averaging for overlaps.
     combined_correlation = {}
     combined_coherency = {}
-    for key in all_keys:
-        band_name, shank_idx = key
-        shank_maps, n_shank_channels = shank_maps_cache[shank_idx]
-        if n_shank_channels == 0:
-            continue
-
+    all_bands = {band for result in results for band in result.correlation}
+    for band_name in all_bands:
         corr_mat = np.zeros(
-            (n_shank_channels, n_shank_channels), dtype=np.float32
+            (total_n_channels, total_n_channels), dtype=np.float32
         )
         coh_mat = np.zeros(
-            (n_shank_channels, n_shank_channels), dtype=np.complex64
+            (total_n_channels, total_n_channels), dtype=np.complex64
         )
         weight = np.zeros(
-            (n_shank_channels, n_shank_channels), dtype=np.float32
+            (total_n_channels, total_n_channels), dtype=np.float32
         )
-        for s_map, result in zip(shank_maps, results):
-            if s_map is None or key not in result.correlation:
+        for ch_map, result in zip(block_channel_maps, results, strict=True):
+            if id(result) not in coherence_result_ids:
+                continue
+            if band_name not in result.correlation:
                 continue
             n_win = result.rms_ap.shape[0]
-            block_corr = result.correlation[key]
-            block_coh = result.coherency[key]
-            corr_mat[np.ix_(s_map, s_map)] += block_corr * n_win
-            coh_mat[np.ix_(s_map, s_map)] += block_coh * n_win
-            weight[np.ix_(s_map, s_map)] += n_win
+            block_corr = result.correlation[band_name]
+            block_coh = result.coherency[band_name]
+            corr_mat[np.ix_(ch_map, ch_map)] += block_corr * n_win
+            coh_mat[np.ix_(ch_map, ch_map)] += block_coh * n_win
+            weight[np.ix_(ch_map, ch_map)] += n_win
         mask = weight > 0
         corr_mat[mask] /= weight[mask]
         coh_mat[mask] /= weight[mask]
-        combined_correlation[key] = corr_mat
-        combined_coherency[key] = coh_mat
+        combined_correlation[band_name] = corr_mat
+        combined_coherency[band_name] = coh_mat
 
     # PSD: assemble with n_windows-weighted averaging for overlaps
     n_lfp_freqs = results[0].psd_power.shape[0]
@@ -570,11 +630,7 @@ def _assemble_blockwise_coherence(
     channel_blocks_meta = []
     for block_idx, (r, ch_map) in enumerate(zip(results, block_channel_maps)):
         rec = r.block.recording
-        label = (
-            "main"
-            if rec.get_duration() >= main_recording_min_secs
-            else "surface"
-        )
+        label = block_source(r.block, main_recording_min_secs)
         channel_blocks_meta.append(
             {
                 "block_index": block_idx,
@@ -582,6 +638,8 @@ def _assemble_blockwise_coherence(
                 "label": label,
                 "n_channels": rec.get_num_channels(),
                 "duration_s": float(rec.get_duration()),
+                "used_for_coherence": coherence_block_source == "all"
+                or label == coherence_block_source,
             }
         )
 
@@ -591,4 +649,10 @@ def _assemble_blockwise_coherence(
         "psd_power": combined_psd,
         "psd_freqs": results[0].psd_freqs,
         "channel_blocks": channel_blocks_meta,
+        "row_channels": _build_row_channels_metadata(
+            results,
+            block_channel_maps,
+            channel_table,
+            main_recording_min_secs=main_recording_min_secs,
+        ),
     }

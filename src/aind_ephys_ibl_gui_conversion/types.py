@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import spikeinterface as si
+
+if TYPE_CHECKING:
+    from aind_ephys_ibl_gui_conversion.metric_context import BlockContext
+    from aind_ephys_ibl_gui_conversion.window_pipeline import ExecutionStats
 
 
 @dataclass
@@ -16,6 +21,7 @@ class ExperimentBlock:
     recording: si.BaseRecording
     lfp_recording: si.BaseRecording | None  # 1.0 probes only
     block_index: int
+    source: Literal["main", "surface"] | None = None
 
     @property
     def is_1_0(self) -> bool:
@@ -57,10 +63,21 @@ class ProbeStream:
 
 
 @dataclass
+class ChannelTable:
+    """Per-probe channel metadata in canonical output order."""
+
+    raw_ind: np.ndarray  # legacy positional rawInd, unchanged for now
+    contact_id: np.ndarray  # physical probe contact ids in row order
+    local_coordinates: np.ndarray  # (n_channels, 2)
+    shank_ind: np.ndarray  # 0-based normalized shank index per channel
+
+
+@dataclass
 class ShankChannels:
     """Per-shank channel metadata from one block (depth-sorted)."""
 
-    shank_index: int  # 1-based, matches correlation/coherency key
+    shank_index: int  # 1-based legacy file suffix; shankInd is 0-based
+    channel_indices: np.ndarray  # block channel indices, depth-sorted
     locations: np.ndarray  # (n_shank_channels, 2), depth-sorted
 
 
@@ -72,8 +89,11 @@ class BlockMetrics:
     rms_ap: np.ndarray  # (n_windows, n_channels)
     rms_lfp: np.ndarray  # (n_windows, n_channels)
     timestamps: np.ndarray  # (n_windows,)
-    correlation: dict  # (band, shank_idx) -> (n_ch, n_ch)
-    coherency: dict  # (band, shank_idx) -> complex (n_ch, n_ch)
+    correlation: dict  # band -> full real coherency matrix
+    coherency: dict  # band -> full complex coherency matrix
     psd_power: np.ndarray  # (n_lfp_freqs, n_channels)
     psd_freqs: np.ndarray  # (n_lfp_freqs,)
     shank_channels: list[ShankChannels]  # per-shank channel info
+    metric_results: dict[str, Any] = field(default_factory=dict)
+    metric_stats: ExecutionStats | None = None
+    metric_context: BlockContext | None = None

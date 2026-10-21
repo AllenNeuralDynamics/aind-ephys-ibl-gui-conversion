@@ -19,11 +19,17 @@ from aind_ephys_ibl_gui_conversion.io import (
     load_probe_streams,
     process_stream_fft,
 )
+from aind_ephys_ibl_gui_conversion.metric_extensions import (
+    WindowMetric,
+    validate_metrics,
+)
 from aind_ephys_ibl_gui_conversion.metrics import (
     COHERENCE_BANDS,
+    CoherenceBlockSource,
     _assemble_blockwise_coherence,
     _compute_all_metrics,
     _parseval_rms,
+    block_source,
 )
 from aind_ephys_ibl_gui_conversion.recording_utils import (
     _merge_separate_asset_recording_dicts,
@@ -71,6 +77,46 @@ __all__ = [
 ]
 
 
+def _results_in_block_order(
+    stream: ProbeStream,
+    all_results: list[tuple[ProbeStream, BlockMetrics]],
+) -> list[BlockMetrics]:
+    """Return *stream*'s results in ``stream.blocks`` order.
+
+    Ordering by ``block_index`` is wrong once a surface-finding recording is
+    merged in: that index is per-recording, so the surface blocks restart at
+    0 and collide with the main recording's.
+
+    The collision matters because the canonical channel table is built by
+    *first-seen* order in ``build_channel_table``, and it is built twice from
+    two different lists -- ``_save_channel_metadata`` walks ``stream.blocks``
+    while ``_build_channel_maps`` walks these results. Sorting by a colliding
+    index reorders one and not the other, so the saved ``channels.*.npy``
+    rows stop matching the correlation/coherency rows that
+    ``row_channels.json`` indexes, with nothing raised. Keying off
+    ``stream.blocks`` makes the two constructions identical by definition.
+
+    Only reachable with >=2 main blocks *and* a surface block, which is why
+    equal-count sessions never showed it.
+
+    Parameters
+    ----------
+    stream : ProbeStream
+        The stream whose results to collect.
+    all_results : list[tuple[ProbeStream, BlockMetrics]]
+        Every ``(stream, result)`` pair, in arbitrary completion order.
+
+    Returns
+    -------
+    list[BlockMetrics]
+        One result per block, aligned to ``stream.blocks``.
+    """
+    # id() keys because ExperimentBlock is an unhashable dataclass; these are
+    # the same objects that were submitted for processing.
+    by_block = {id(r.block): r for s, r in all_results if s is stream}
+    return [by_block[id(block)] for block in stream.blocks]
+
+
 def extract_continuous(
     sorting_folder: Path,
     results_folder: Path,
@@ -80,6 +126,7 @@ def extract_continuous(
     rms_window_interval: float = 30.0,
     rms_window_duration: float = 4.0,
     num_parallel_jobs: int = 4,
+    session_folder: Path | None = None,
     # Legacy parameters kept for API compatibility (ignored)
     coherence_duration: float = 60.0,
     coherence_window_duration: float = 2.0,
@@ -91,6 +138,8 @@ def extract_continuous(
     lfp_correlation_min_secs: int = 600,
     lfp_correlation_num_bins: int = 5,
     lfp_bandpass_margin_ms: float = 3000.0,
+    coherence_block_source: CoherenceBlockSource = "all",
+    extra_metrics: tuple[WindowMetric, ...] = (),
 ):
     """Extract QC metrics from raw ephys data using FFT-based computation.
 
@@ -105,7 +154,9 @@ def extract_continuous(
     results_folder : Path
         Path where output files will be saved.
     stream_to_use : str or None
-        If provided, only process this stream.
+        If provided, only process this stream. Accepts either the full
+        Open Ephys stream name or the probe/collection token (e.g.
+        ``"ProbeA"``); the token also selects the paired LFP stream.
     main_recording_min_secs : int
         Minimum duration (seconds) to classify as main recording.
     probe_surface_finding : Path or None
@@ -116,8 +167,29 @@ def extract_continuous(
         Duration of each window in seconds (LFP metrics + RMS).
     num_parallel_jobs : int
         Number of blocks to process in parallel.
+    session_folder : Path or None
+        Path to the raw session folder (holding ``ecephys_compressed``). If
+        given, it is used directly; otherwise it is derived from
+        ``sorting_folder`` by stripping the ``_sorted...`` suffix, which
+        assumes the raw and sorted folders are siblings. Pass this explicitly
+        when the caller knows the raw folder's location (e.g. a pipeline that
+        mounts raw and sorted assets under unrelated parents) so the sibling
+        assumption is not required.
+    coherence_block_source : {"all", "main", "surface"}
+        Block provenance used to aggregate correlation and coherency. Other
+        metrics and channel metadata continue to use all blocks.
+    extra_metrics : tuple[WindowMetric, ...]
+        Opt-in immutable metric configurations. Each block creates its own
+        accumulator; stream adapters pool results after workers finish.
     """
-    session_folder = Path(str(sorting_folder).split("_sorted")[0])
+    validate_metrics(extra_metrics)
+    if session_folder is None:
+        session_folder = Path(str(sorting_folder).split("_sorted")[0])
+    if coherence_block_source not in {"all", "main", "surface"}:
+        raise ValueError(
+            "coherence_block_source must be 'all', 'main', or 'surface'"
+        )
+    logging.info("[FFT] Coherency blocks=%s", coherence_block_source)
 
     # Enable multi-threaded wavpack decompression if available
     try:
@@ -154,18 +226,53 @@ def extract_continuous(
         (
             neuropix_streams_surface,
             ecephys_compressed_folder_surface,
-            _,
+            num_blocks_surface,
         ) = get_ecephys_stream_names(probe_surface_finding)
+
+        # Use the surface recording's OWN block count. It is an independent,
+        # usually shorter acquisition, so it has no reason to have the same
+        # number of experiments as the main recording. Passing the main
+        # count made load_probe_streams ask for
+        # experiment<N>_<stream>.zarr files that do not exist, and only the
+        # LFP branch guards a missing zarr -- an absent AP/wideband block
+        # raises. 754372's 2025-01-15 session is the live case: main has
+        # experiment1+2, surface has experiment1 only, and exactly the
+        # experiment2 units failed. A surface recording that happens to
+        # match the main block count passed silently, so this was latent
+        # across the cohort.
+        if num_blocks_surface != num_blocks:
+            logging.info(
+                f"[FFT] Surface-finding recording has "
+                f"{num_blocks_surface} block(s) vs {num_blocks} in the "
+                "main recording; using its own count"
+            )
 
         surface_streams = load_probe_streams(
             neuropix_streams_surface,
-            num_blocks,
+            num_blocks_surface,
             ecephys_compressed_folder_surface,
             results_folder,
             stream_to_use=stream_to_use,
             main_recording_min_secs=main_recording_min_secs,
+            block_source="surface",
         )
         streams = merge_probe_streams(streams, surface_streams)
+
+    if coherence_block_source != "all":
+        missing = [
+            stream.probe_name
+            for stream in streams
+            if not any(
+                block_source(block, main_recording_min_secs)
+                == coherence_block_source
+                for block in stream.blocks
+            )
+        ]
+        if missing:
+            raise ValueError(
+                f"coherence_block_source={coherence_block_source!r} has no "
+                f"matching blocks for stream(s): {', '.join(missing)}"
+            )
 
     # Divide FFT threads across pool workers to avoid oversubscription
     n_cpus = os.cpu_count() or 1
@@ -173,6 +280,11 @@ def extract_continuous(
 
     # Count total blocks for logging
     total_blocks = sum(len(s.blocks) for s in streams)
+    block_ids = {
+        id(block): f"{stream.stream_name}/block-{ordinal}"
+        for stream in streams
+        for ordinal, block in enumerate(stream.blocks)
+    }
     logging.info(
         f"[FFT] Processing {len(streams)} stream(s), "
         f"{total_blocks} block tasks "
@@ -194,6 +306,9 @@ def extract_continuous(
                 block,
                 window_interval=rms_window_interval,
                 window_duration=rms_window_duration,
+                extra_metrics=extra_metrics,
+                block_id=block_ids[id(block)],
+                main_recording_min_secs=main_recording_min_secs,
             )
 
             total = (datetime.now() - block_start).total_seconds()
@@ -236,16 +351,15 @@ def extract_continuous(
 
     # --- Assemble per stream ---
     for stream in streams:
-        results = sorted(
-            [r for s, r in all_results if s is stream],
-            key=lambda r: r.block.block_index,
-        )
+        results = _results_in_block_order(stream, all_results)
 
         _assemble_and_save_stream(
             stream,
             results,
             rms_window_interval=rms_window_interval,
             rms_window_duration=rms_window_duration,
+            coherence_block_source=coherence_block_source,
+            extra_metrics=extra_metrics,
         )
 
     total_elapsed = (datetime.now() - start).total_seconds()
