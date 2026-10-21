@@ -77,6 +77,45 @@ def _load_analyzer(analyzer_folder: Path):
     return analyzer
 
 
+def _sorting_labels(sorting: si.BaseSorting) -> dict[str, np.ndarray]:
+    """Read QC and classification properties with explicit precedence."""
+    labels = {}
+    keys = sorting.get_property_keys()
+    for column, alternatives in (
+        ("default_qc", ("default_qc",)),
+        ("unitrefine_label", ("decoder_label", "unitrefine_label")),
+    ):
+        for key in alternatives:
+            if key in keys:
+                labels[column] = sorting.get_property(key)
+                break
+    return labels
+
+
+def _quality_metrics_with_labels(analyzer, curated_path: Path) -> pd.DataFrame:
+    """Add labels, optionally falling back to a matching curated sorting.
+
+    Analyzer properties take precedence. Missing curated folders leave labels
+    absent, as in the original converter. Existing but incompatible curated
+    data raises rather than attaching labels to the wrong units.
+    """
+    metrics = analyzer.get_extension("quality_metrics").get_data().copy()
+    labels = _sorting_labels(analyzer.sorting)
+    if len(labels) < 2 and curated_path.exists():
+        curated = si.load(curated_path)
+        if not np.array_equal(curated.unit_ids, analyzer.unit_ids):
+            raise ValueError(
+                f"Curated and analyzer unit IDs do not match: {curated_path}"
+            )
+        for column, values in _sorting_labels(curated).items():
+            labels.setdefault(column, values)
+    metrics.index.name = "cluster_id"
+    metrics["cluster_id.1"] = metrics.index.values
+    for column, values in labels.items():
+        metrics[column] = pd.Series(values, index=analyzer.unit_ids)
+    return metrics
+
+
 def extract_spikes(  # noqa: C901
     sorting_folder: Path,
     results_folder: Path,
@@ -121,6 +160,7 @@ def extract_spikes(  # noqa: C901
     print(f"ecephys compressed folder: {ecephys_compressed_folder}")
 
     postprocessed_folder = sorting_folder / "postprocessed"
+    curated_folder = sorting_folder / "curated"
 
     stream_names, stream_ids = se.get_neo_streams(
         "openephysbinary", ecephys_folder
@@ -140,6 +180,7 @@ def extract_spikes(  # noqa: C901
             continue
 
         analyzer_mappings = []
+        curated_paths = []
         num_shanks = 0
         shank_glob = tuple(postprocessed_folder.glob(f"*{stream_name}*group*"))
         if shank_glob:
@@ -181,6 +222,7 @@ def extract_spikes(  # noqa: C901
                     continue
 
                 analyzer_mappings.append(analyzer)
+                curated_paths.append(curated_folder / analyzer_folder.name)
         else:
             analyzer_folder = _find_analyzer_folder(
                 postprocessed_folder, stream_name
@@ -195,6 +237,7 @@ def extract_spikes(  # noqa: C901
 
             analyzer = _load_analyzer(analyzer_folder)
             analyzer_mappings.append(analyzer)
+            curated_paths.append(curated_folder / analyzer_folder.name)
 
         print("Converting data...")
 
@@ -252,29 +295,9 @@ def extract_spikes(  # noqa: C901
             amps.append(spike_amplitudes)
             spike_depths.append(spike_locations["y"])
 
-            qm_data = analyzer.get_extension("quality_metrics").get_data()
-
-            qm_data.index.name = "cluster_id"
-            qm_data["cluster_id.1"] = qm_data.index.values
-            if "default_qc" in analyzer.sorting.get_property_keys():
-                qm_data["default_qc"] = analyzer.sorting.get_property(
-                    "default_qc"
-                )
-
-            if (
-                "decoder_label" in analyzer.sorting.get_property_keys()
-                or "unitrefine_label" in analyzer.sorting.get_property_keys()
-            ):
-                unitrefine_column_name = (
-                    "decoder_label"
-                    if "decoder_label" in analyzer.sorting.get_property_keys()
-                    else "unitrefine_label"
-                )
-                qm_data["unitrefine_label"] = analyzer.sorting.get_property(
-                    unitrefine_column_name
-                )
-
-            quality_metrics.append(qm_data)
+            quality_metrics.append(
+                _quality_metrics_with_labels(analyzer, curated_paths[index])
+            )
 
         if len(analyzer_mappings) == 1:
             spike_clusters = np.squeeze(clusters[0])

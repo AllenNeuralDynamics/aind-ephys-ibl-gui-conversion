@@ -31,9 +31,7 @@ extract_continuous(
     sorting_folder=Path("/data/session_sorted"),
     session_folder=Path("/data/session"),
     results_folder=results,
-    extra_metrics=(
-        lfp_band_power(low_hz=30, high_hz=100),
-    ),
+    extra_metrics=(lfp_band_power(low_hz=30, high_hz=100),),
 )
 ```
 
