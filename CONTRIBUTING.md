@@ -191,12 +191,17 @@ or cherry-picked under new hashes. Remote branches were not deleted.
 
 | Branch | Meaning and next step |
 | --- | --- |
-| `main` | Contains the sampled metric API (`685f3cd`), dependency reduction (`b954978`), and revised execution guide (`74179f7`). Start new work here. |
+| `main` | Contains the sampled metric API (`685f3cd`), dependency reduction (`b954978`), revised execution guide (`74179f7`), and merged legacy-label recovery plus CI repairs from PR #45 (`134c507`). Start new work here. |
 | `feat/brain-surface-lines-main` | Port onto main's sampled API, including contact mapping and regression tests. Ready for real-data testing and integration; see [usage](docs/brain_surface_lines.md). Candidates still need calibration and downstream GUI integration. |
 | `feat/brain-surface-lines` | Original detector at `09976dd`, retained as the reference for testing the port. |
 | `feat/raw-activity-api` | Raw activity adapted to the sampled API, at `91e44a0`; checked out in the sibling `raw-activity-worktree`. This contains work beyond main. |
 | `experiment/raw-activity-detector-corrections` | Follow-up detector corrections at `8713500`, branching from the activity implementation at `ea025eb`: physical neighborhoods prevent distant banks supporting each other, flat peaks count once, and eligible events obey the full refractory interval. This is a separate development line from the later activity documentation commit. |
-| `origin/legacy-data-compat` / `origin/fix/legacy-data-compat` | Ben Hardcastle's open [PR #45](https://github.com/AllenNeuralDynamics/aind-ephys-ibl-gui-conversion/pull/45) targets the older `legacy-data-compat` branch (`3492a0b`). The newer `fix/legacy-data-compat` commit (`1707c35`) uses current loader helpers and explicit property precedence. Both recover QC and decoder labels from curated sorting objects when absent on the analyzer. They still require the quality-metrics extension. Port with coverage for absent curated folders and mismatched units; the older PR also uses Boolean `or` on NumPy arrays, which can fail. |
+
+Ben Hardcastle's [PR #45](https://github.com/AllenNeuralDynamics/aind-ephys-ibl-gui-conversion/pull/45)
+merged on October 21 as `134c507`, after fixes for optional curated inputs,
+NumPy property arrays, and supported loaders. The October adaptation
+(`1707c35`, `origin/fix/legacy-data-compat`) is superseded by that tested
+implementation. The clean review worktree and local PR branch were removed.
 
 Arjun Sridhar opened [PR #34](https://github.com/AllenNeuralDynamics/aind-ephys-ibl-gui-conversion/pull/34)
 for deprecated metric names. It was closed on 2026-04-15 because
@@ -209,24 +214,22 @@ The `yb-flexible-recording-number` proposal was explicitly discarded on
 October 21. Main continues to discover analyzer names automatically and
 retain the longest recording segment.
 
-### Archives
+### Local archive tags
 
-| Branch | What it preserves | Assessment |
+The remaining archive and backup branches were converted to annotated local
+tags. Their complete snapshots and commit histories remain reachable without
+appearing as active development branches.
+
+| Tag | What it preserves | Assessment |
 | --- | --- | --- |
-| `archive/metric-prototype-with-detectors` (`f94446f`) | One preservation commit on top of `09976dd`: combined metric API, activity detector, surface detector, design review, numerical fixtures, and six benchmark JSON reports. | Contains unique experimental evidence and older detector implementations. The API was subsequently separated and landed on main; activity and surface features now have dedicated branches. Retain until those ports and benchmark records are accounted for. |
-| `archive/pre-api-main-drafts` (`ff5f8e9`) | Child of `f9e08e4`: earlier execution/dependency prose plus a saved Zarr SortingAnalyzer extension reload test in `tests/test_spikes.py`. | The reload test remains unique. The Python 3.11/3.13 CI proposal was explicitly discarded on October 21: retain Python 3.10 in CI while the package supports it. Its execution guide predates the API and incorrectly describes the current pipeline as lacking configurable metrics. Do not merge the whole archive. |
+| `archive/metric-prototype-with-detectors` (`f94446f`) | One preservation commit on top of `09976dd`: combined metric API, activity detector, surface detector, design review, numerical fixtures, and six benchmark JSON reports. | Historical evidence. The API landed on main; activity and surface features have dedicated branches. |
+| `archive/pre-api-main-drafts` (`ff5f8e9`) | Child of `f9e08e4`: earlier execution/dependency prose plus a saved Zarr SortingAnalyzer extension reload test in `tests/test_spikes.py`. | The optional reload test remains recoverable here. The Python 3.11/3.13 CI proposal was explicitly discarded on October 21: retain Python 3.10 in CI while the package supports it. Its execution guide predates the API. |
+| `archive/simplify-data-access-pre-squash` (`820509d`) | Detailed unified FFT development history and completed `REFACTOR.md` plan. | Runtime tree matches the unified FFT squash (`ba9a482`) already on main. No active feature remains. |
 
 The October 16 archives were explicitly created to preserve experiments and
 uncommitted drafts while separating the sampled API from detector work. Their
 large diffs against the merge base include earlier versions of work now on
 main, so those diff sizes overstate the amount of missing implementation.
-
-### Historical backup
-
-`backup/feat-simplify-data-access-pre-squash` (`820509d`) retains detailed
-development history and `REFACTOR.md`. Its runtime tree matches the unified
-FFT squash (`ba9a482`) already on main. There is no active feature to port;
-the branch preserves history that would otherwise lose its named reference.
 
 ### Removed local branches
 
@@ -246,12 +249,18 @@ the branch preserves history that would otherwise lose its named reference.
 | `fix/si-deprecated-template-metrics` | `2f27e26` | PR #34 was closed after the upstream fix; locked SpikeInterface 0.105.3 contains that fix. Full branch history remains on the remote. |
 | `update-packaging` | `f85af1c` | Exact tree match to the squash merge `9af1263` from PR #28, merged February 25 Pacific time. No remaining changes to port. |
 | `yb-flexible-recording-number` | `57b8da4` | Explicitly discarded; keep main's automatic analyzer discovery and longest-segment policy. |
+| `archive/metric-prototype-with-detectors` | `f94446f` | Preserved as the annotated tag of the same name. |
+| `archive/pre-api-main-drafts` | `ff5f8e9` | Preserved as the annotated tag of the same name. |
+| `backup/feat-simplify-data-access-pre-squash` | `820509d` | Preserved as annotated tag `archive/simplify-data-access-pre-squash`. |
+| `legacy-data-compat` | `4280fb5` | PR #45 merged as `134c507`; source, tests, docs, and scripts match the implementation on main. |
 
 Use `git show <commit>` for a preservation commit and `git diff main <branch>
 -- <path>` to inspect the current content difference. Use `git cherry` to
 detect equivalent patches; ahead/behind counts alone cannot identify work
 that landed with different commit hashes. The table above records the local
-branch cleanup; retained archives still contain the identified unique work.
+branch cleanup. To inspect a historical snapshot, use
+`git show refs/tags/archive/pre-api-main-drafts:tests/test_spikes.py`, replacing
+the tag and path as needed.
 
 ## Related packages
 
