@@ -205,10 +205,9 @@ fixed the underlying load order. The locked installation runs compatibility
 migration before metric validation. The old monkey-patch is obsolete for that
 installation; the remote branch remains historical.
 
-Two older proposals retain unique history and need a separate review:
-`update-packaging` contains an earlier template migration, largely superseded
-by current infrastructure; `yb-flexible-recording-number` adds explicit
-recording-number selection and last-segment selection. Main automatically
+The older `yb-flexible-recording-number` proposal needs a separate review:
+it adds explicit recording-number selection and last-segment selection.
+Main automatically
 discovers analyzer names and retains the longest recording segment, so the
 latter branch includes policy differences, not just an old duplicate fix.
 
@@ -247,6 +246,7 @@ the branch preserves history that would otherwise lose its named reference.
 | `fix/spike-interface-104` | `5aa164a` | Adjusted removed filter code/tests; main already requires SpikeInterface >=0.104. |
 | `feat/simplify-data-access` | `8d68596` | Exact tree match to `ba9a482`, already on main. |
 | `fix/si-deprecated-template-metrics` | `2f27e26` | PR #34 was closed after the upstream fix; locked SpikeInterface 0.105.3 contains that fix. Full branch history remains on the remote. |
+| `update-packaging` | `f85af1c` | Exact tree match to the squash merge `9af1263` from PR #28, merged February 25 Pacific time. No remaining changes to port. |
 
 Use `git show <commit>` for a preservation commit and `git diff main <branch>
 -- <path>` to inspect the current content difference. Use `git cherry` to
