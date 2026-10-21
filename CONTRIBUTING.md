@@ -131,10 +131,10 @@ Open Ephys stream IDs follow
   See `metrics._parseval_rms()` and `_compute_all_metrics()`.
 - **Coherence bands**: `delta, theta, alpha, beta, gamma` defined in
   `metrics.COHERENCE_BANDS`.
-- **SI 0.104 compatibility**: SpikeInterface renamed metrics
-  (`peak_to_valley` -> `peak_to_trough_duration`). There is a monkey-patch
-  (`_patch_si_deprecated_metric_validation()`) for backward compatibility
-  with legacy waveform extractors.
+- **Legacy waveform compatibility**: `_load_analyzer()` delegates legacy
+  folders to SpikeInterface's waveform loader. The additional deprecated
+  metric-name patch exists on `fix/si-deprecated-template-metrics` and its
+  backup, and is absent from main; see the branch map below.
 - **Auto-adjusted window interval**: `extract_continuous` shortens
   `rms_window_interval` for short recordings to guarantee at least 20
   windows (needed for coherence statistics).
@@ -175,6 +175,49 @@ Open Ephys stream IDs follow
 - **aind-mri-utils** -- Probe trajectory fitting in `histology.py`
 - **wavpack-numcodecs** -- Decompresses WavPack-compressed zarr recordings
 - **tqdm, numpy** -- Standard utilities
+
+## Development branch map
+
+Audited against main at `09153d2` on 2026-10-21. Branch names below describe
+local refs; an absent merge commit does not establish that their work is
+missing. Several changes were squashed or cherry-picked under new hashes.
+
+### Current feature work
+
+| Branch | Meaning and next step |
+| --- | --- |
+| `main` | Contains the sampled metric API (`685f3cd`), dependency reduction (`b954978`), and revised execution guide (`74179f7`). Start new work here. |
+| `feat/sampled-metric-api` | Old API staging branch. Its two commits (`6926e6a`, `264d006`) are patch-equivalent to commits on main (`git cherry main feat/sampled-metric-api` marks both `-`). No feature remains to port. |
+| `feat/brain-surface-lines` | Original detector at `09976dd`, based before the API. `experiment/metric-pipeline` points to the same commit. Use the port on `feat/brain-surface-lines-main` for the current API; see [usage](docs/brain_surface_lines.md). |
+| `feat/raw-activity-api` | Raw activity adapted to the sampled API, at `91e44a0`; checked out in the sibling `raw-activity-worktree`. This contains work beyond main. |
+| `experiment/raw-activity-detector-corrections` | Follow-up detector corrections at `8713500`, branching from the activity implementation at `ea025eb`. This is a separate development line from the later activity documentation commit. |
+
+### Archives
+
+| Branch | What it preserves | Assessment |
+| --- | --- | --- |
+| `archive/agent-refactor` (`68b38fa`) | Early split of `ephys.py` into types, I/O, metrics, spikes, and recording utilities. | Superseded by the later module split (`541fa42`) and unified FFT rewrite. Main has that architecture. Keep as historical reference; merging this old snapshot would not help. |
+| `archive/metric-prototype-with-detectors` (`f94446f`) | One preservation commit on top of `09976dd`: combined metric API, activity detector, surface detector, design review, numerical fixtures, and six benchmark JSON reports. | Contains unique experimental evidence and older detector implementations. The API was subsequently separated and landed on main; activity and surface features now have dedicated branches. Retain until those ports and benchmark records are accounted for. |
+| `archive/pending-python-ci` (`f9e08e4`) | A single commit on top of the old API staging tip `264d006`, proposing Python 3.11/3.13 in place of 3.10/3.13. | The CI change is still absent from audited main. Review that single commit independently of its already-landed API ancestors. This commit is also reachable through `archive/pre-api-main-drafts`. |
+| `archive/pre-api-main-drafts` (`ff5f8e9`) | Child of `f9e08e4`: earlier execution/dependency prose plus a saved Zarr SortingAnalyzer extension reload test in `tests/test_spikes.py`. | Main contains revised documentation, but the reload test and CI proposal remain unique. Its execution guide predates the API and incorrectly describes the current pipeline as lacking configurable metrics. Do not merge the whole archive. |
+
+The October 16 archives were explicitly created to preserve experiments and
+uncommitted drafts while separating the sampled API from detector work. Their
+large diffs against the merge base include earlier versions of work now on
+main, so those diff sizes overstate the amount of missing implementation.
+
+### Backups
+
+| Branch | Assessment |
+| --- | --- |
+| `backup/feat-simplify-data-access-pre-squash` (`820509d`) | Detailed development history before the unified FFT squash. Its final tree differs from `feat/simplify-data-access` (`8d68596`) only by `REFACTOR.md`; it preserves history and a plan, rather than a separate runtime feature. |
+| `backup/fix-si-deprecated-template-metrics` (`cfd1582`) | Earlier version of the legacy waveform metric-name compatibility fix. The later remote branch (`origin/fix/si-deprecated-template-metrics`, `404748d`) differs only in `spikes.py` formatting, a docstring, and log expression construction. Main's `_load_analyzer()` delegates to SpikeInterface and does not contain this patch, despite the older development guide claiming it did. The backup is redundant with the later fix branch for runtime behavior, but that fix itself remains separate work to evaluate. |
+
+Use `git show <commit>` for a preservation commit and `git diff main <branch>
+-- <path>` to inspect the current content difference. Use `git cherry` to
+detect equivalent patches; ahead/behind counts alone cannot identify work
+that landed with different commit hashes. No archive or backup refs were
+deleted during this audit.
 
 ## Related packages
 
