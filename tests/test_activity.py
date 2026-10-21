@@ -201,7 +201,7 @@ def test_output_retains_overlap_pitch_columns_depth_and_missingness(tmp_path):
     recordings = []
     for coords in (first, second):
         recording = si.NumpyRecording(np.zeros((1000, 4), np.float32), 2000)
-        recording.set_property("location", coords)
+        recording.set_dummy_probe_from_locations(coords)
         recording.set_property("group", np.zeros(4, dtype=int))
         recordings.append(recording)
     table, maps = build_channel_table(recordings)

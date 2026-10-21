@@ -89,6 +89,19 @@ adds interference amplitudes and surface candidates through `extra_metrics`.
 For optional per-channel AP event rates, see [raw activity](docs/raw_activity.md).
 Enable it through `extra_metrics` to share the default metrics' recording reads.
 
+On `test/activity-and-surface-lines`, enable both experimental metrics:
+
+```python
+from aind_ephys_ibl_gui_conversion.activity import raw_activity
+from aind_ephys_ibl_gui_conversion.surface_lines import brain_surface_lines
+
+extract_continuous(
+    sorting_folder,
+    results_folder,
+    extra_metrics=(raw_activity(), brain_surface_lines()),
+)
+```
+
 Coherence bands (from `metrics.COHERENCE_BANDS`):
 
 | Band | Range (Hz) |

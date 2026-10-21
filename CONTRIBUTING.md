@@ -192,6 +192,7 @@ or cherry-picked under new hashes. Remote branches were not deleted.
 | Branch | Meaning and next step |
 | --- | --- |
 | `main` | Contains the sampled metric API (`685f3cd`), dependency reduction (`b954978`), revised execution guide (`74179f7`), and merged legacy-label recovery plus CI repairs from PR #45 (`134c507`). Start new work here. |
+| `test/activity-and-surface-lines` | Combines current main, `feat/brain-surface-lines-main`, and `feat/raw-activity-api` for testing both optional metrics together. Uses the activity API branch's original detector; the separate detector-corrections experiment is not included. See the README for the combined configuration. |
 | `feat/brain-surface-lines-main` | Port onto main's sampled API, including contact mapping and regression tests. Ready for real-data testing and integration; see [usage](docs/brain_surface_lines.md). Candidates still need calibration and downstream GUI integration. |
 | `feat/brain-surface-lines` | Original detector at `09976dd`, retained as the reference for testing the port. |
 | `feat/raw-activity-api` | Raw activity adapted to the sampled API, at `91e44a0`; checked out in the sibling `raw-activity-worktree`. This contains work beyond main. |
