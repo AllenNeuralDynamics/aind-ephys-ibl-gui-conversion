@@ -83,6 +83,9 @@ per-band RMS, PSD, and coherence files in IBL ALF format.
 | `coherence_block_source` | `"all"` | Blocks contributing to correlation/coherency: `"all"`, `"main"`, or `"surface"`. PSD, RMS, and channel metadata still use all blocks. |
 | `extra_metrics` | `()` | Optional [metric extensions](docs/metric_extensions.md) sharing the existing sampled reads and FFTs |
 
+The optional [brain surface line detector](docs/brain_surface_lines.md)
+adds interference amplitudes and surface candidates through `extra_metrics`.
+
 Coherence bands (from `metrics.COHERENCE_BANDS`):
 
 | Band | Range (Hz) |
