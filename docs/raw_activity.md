@@ -1,8 +1,8 @@
-# Raw AP activity per channel
+# Raw AP activity per contact
 
-Raw activity measures supported negative-event rates in AP traces. Several
-contacts can detect the same event, so these rates do not count distinct
-neurons. Enable the metric alongside the default continuous metrics:
+Raw activity measures supported negative-event rates in AP traces. It is a
+spatial activity proxy: several contacts can detect the same event, and rates
+do not count distinct neurons. Enable it alongside the default metrics:
 
 ```python
 from aind_ephys_ibl_gui_conversion import extract_continuous
@@ -15,82 +15,81 @@ extract_continuous(
 )
 ```
 
-The metric uses the sampled extension API with an independent accumulator per
-experiment block. It adds three files in each probe folder:
+Each probe folder gains three files:
 
 - `_iblqc_channels.rawActivity.npy`: event rates in Hz.
-- `_iblqc_channels.rawActivitySampledDuration.npy`: analyzed seconds per
+- `_iblqc_channels.rawActivitySampledDuration.npy`: analyzed seconds for each
   contact, after filter-edge trimming and channel rejection.
 - `_iblqc_rawActivity.metadata.json`: parameters, exact sampled intervals,
   block identities, units, and pooling policy.
 
-Entry `i` refers to row `i` of `channels.localCoordinates.npy`, with shank
-identity in `channels.shankInd.npy`. Mixed pitches, depth offsets, split-bank
-columns, and overlapping survey coverage retain those coordinates. Missing or
-rejected measurements remain `NaN` with zero coverage. Conversion exports
-per-contact rates without depth binning, interpolation, bank stacking,
-smoothing, or profile normalization.
+Array entry `i` refers to row `i` of `channels.localCoordinates.npy`, with
+shank identity in `channels.shankInd.npy`. Mixed pitches, depth offsets,
+split-bank columns, and overlapping survey coverage retain those coordinates.
+Missing or rejected measurements remain `NaN` with zero coverage. Conversion
+exports these per-contact measurements without depth binning, interpolation,
+bank stacking, smoothing, or profile normalization.
 
-## Sampling and aggregation
+## Sampling shares the existing recording reads
 
-The default selects one one-second snippet per block, centered within the
-middle scheduled read. It keeps the original estimator's sampling budget;
-the location can differ from its original midpoint chunk. A 25 ms trim at
-each edge leaves 0.95 seconds of analyzed data at 30 kHz. The metric adds no
-recording reads or FFTs, although filtering and detection still add computation
-and temporary arrays.
+The default budget selects one one-second snippet per experiment block,
+centered within the middle scheduled read. Each snippet
+discards 25 ms at either edge after filtering, leaving 0.95 seconds of analyzed
+data at 30 kHz. Filtering and event detection still add CPU work and temporary
+arrays. A three-snippet budget analyzes 2.85 seconds distributed across the
+block without adding recording reads or FFTs.
 
-To select up to three distributed snippets instead:
+To change the budget or detector parameters:
 
 ```python
+from aind_ephys_ibl_gui_conversion.activity import ActivityParams
 from aind_ephys_ibl_gui_conversion.metric_context import SampleBudget
 
-activity = raw_activity(sampling=SampleBudget(max_windows=3))
+activity = raw_activity(
+    sampling=SampleBudget(max_windows=3, seconds=1.0, edge_seconds=0.025),
+    params=ActivityParams(support_radius_um=40, noise_radius_um=100),
+)
 ```
 
-Snippets must fit inside existing reads and leave a positive core after
-trimming. Configuration is validated before recording I/O. See the
-[execution overview](continuous_metric_pipeline.md) and
-[authoring tutorial](metric_extensions.md) for the shared machinery.
+One snippet selects the middle scheduled window; it need not coincide with
+the recording's exact midpoint. Snippets must fit inside existing reads and
+leave a positive core after trimming. The metric validates these constraints
+before recording I/O. See the [execution overview](continuous_metric_pipeline.md)
+and [metric tutorial](metric_extensions.md) for the shared machinery.
 
-The accumulator preserves the original detector's per-shank reference,
-bandpass, MAD thresholds, artifact vetoes, trimmed mean of snippet rates,
-and channel-health gates. With fewer than ten snippets the 10% trimmed mean
-removes no tails. With one snippet the temporal noise-stability gate has no
-effect. Artifact vetoes suppress events without removing time from the rate
-denominator.
+## Detection and aggregation
 
-Repeated observations of the same physical contact combine as the median of
-healthy block rates. Coverage sums analyzed seconds from those blocks. It
-describes support for the estimate and is not a pooled-count denominator.
-This reduction combines repeated measurements of one contact; contacts at
-the same depth remain separate when their lateral coordinates differ.
+Each snippet is processed independently. The detector subtracts a per-shank
+common median, applies a third-order 300–6,000 Hz Butterworth bandpass with
+forward/backward filtering, and trims the filter edges. The upper cutoff is
+limited to 95% of Nyquist. Per-channel noise is median absolute filtered voltage
+divided by 0.67448975, with a floor based on the shank's positive noise values.
 
-## Detector limitations remain separate from pipeline integration
+A negative peak must exceed 4.5 noise standard deviations. It needs threshold
+support above 3 standard deviations from two contacts, including itself, within
+40 µm Euclidean distance on its shank. Support uses a 0.25 ms moving window.
+Samples where more than 8% of shank contacts exceed 8 noise standard deviations
+in either direction trigger an artifact veto, extended by 0.5 ms on both sides.
 
-This change preserves the detector from PR #46 rather than introducing new
-physical-radius parameters. Its spatial support and local-noise gates still
-use neighborhoods in depth-sorted channel order. Those neighborhoods can span
-physical bank gaps. The original peak selector can also count a flat peak
-multiple times and accept peaks closer than the nominal refractory interval.
-These are known detector limitations for separate correction and review.
+Flat peaks count once. Eligible peaks on one channel must be at least 0.5 ms
+apart; stronger peaks take precedence, with equal-height ties resolved by
+SciPy's peak-selection routine. Temporal lengths round to native samples,
+with a minimum of three samples for peak spacing and the support window.
 
-The frozen synthetic test checks original-detector parity on identical
-snippets. Integration tests cover unchanged reads and FFT counts, out-of-order
-updates, overlap, mixed pitch, split-bank columns, depth offsets, rejected
-contacts, and the saved channel-table order. The metric-specific metadata
-records the legacy spatial-support rule and the chosen contact pooling.
+The accumulator retains only per-window rates and noise summaries. Block
+rates use a 10% trimmed mean; with fewer than ten snippets no tails are removed.
+A contact is rejected when its median noise is outside 0.25–4 times the median
+noise of contacts within 100 µm on the same shank, or its 90th/10th percentile
+noise ratio exceeds five. With one snippet the temporal ratio is one, so that
+gate has no effect. Neighborhoods include the contact itself and are prepared
+once per block from physical coordinates.
 
-`scripts/benchmark_activity.py` compares activity disabled, the original
-estimator, and the integrated metric with one or three snippets in fresh
-processes. It checks complete existing metric arrays and exact read, FFT, and
-compressed-chunk counts. For example:
+Repeated measurements of one physical contact combine as the median of
+healthy block rates. Coverage sums analyzed seconds from those blocks; it is
+descriptive support, not the denominator of a pooled event-count rate.
+Artifact vetoes suppress events without subtracting time from the denominator.
+These thresholds and pooling choices are heuristics that need validation for
+the intended recording conditions.
 
-```sh
-uv run python scripts/benchmark_activity.py --recording /path/to/recording.zarr --blocks 4 --repeats 3 --output /tmp/activity-comparison.json
-```
-
-The original PR commit must be available locally for that comparison. Previous
-timing trials ran while the machine was heavily loaded and included proposed
-detector corrections; they do not establish this integration's performance.
-Repeat timing comparisons on a quiet machine. Inputs remain read-only.
+The [validation notes](raw_activity_validation.md) compare the original PR
+detector with this implementation and describe the performance measurements.
