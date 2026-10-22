@@ -86,8 +86,9 @@ per-band RMS, PSD, and coherence files in IBL ALF format.
 The optional [brain surface line detector](docs/brain_surface_lines.md)
 adds interference amplitudes and surface candidates through `extra_metrics`.
 
-For optional per-channel AP event rates, see [raw activity](docs/raw_activity.md).
-Enable it through `extra_metrics` to share the default metrics' recording reads.
+For optional per-contact AP event rates, see
+[raw activity](docs/raw_activity.md). Enable it through `extra_metrics`; it
+shares recording reads with the default metrics.
 
 On `test/activity-and-surface-lines`, enable both experimental metrics:
 

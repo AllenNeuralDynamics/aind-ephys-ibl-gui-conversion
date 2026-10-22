@@ -1,7 +1,6 @@
-"""Activity detector parity, bounded sampling, and explicit reductions."""
+"""Activity events, physical geometry, bounded sampling, and reductions."""
 
 from dataclasses import replace
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -11,6 +10,8 @@ from aind_ephys_ibl_gui_conversion.activity import (
     ActivityAccumulator,
     ActivityParams,
     ActivityResult,
+    _health_mask,
+    _neighbors,
     _supported_candidates,
     raw_activity,
 )
@@ -54,8 +55,8 @@ def reference_recording():
     return recording
 
 
-def test_frozen_ben_detector_and_robust_reduction_with_out_of_order_windows():
-    """Match original PR rates on identical snippets, including trim/gates."""
+def test_robust_reduction_with_out_of_order_windows():
+    """Out-of-order updates preserve rates, health masks, and coverage."""
     recording = reference_recording()
     starts = np.arange(12) * 0.25
     source = SourceContext.from_recording(recording, 625, starts)
@@ -73,9 +74,19 @@ def test_frozen_ben_detector_and_robust_reduction_with_out_of_order_windows():
         raw.flags.writeable = False
         accumulator.update(index, (raw,))
     result = accumulator.finish()
-    fixture = Path(__file__).parent / "data" / "activity_ben_baseline.npz"
-    with np.load(fixture) as expected:
-        np.testing.assert_array_equal(result.rate_hz, expected["rate_hz"])
+    ordered = ActivityAccumulator(source, plan, params, params.filter(2500))
+    for index in plan.window_indices:
+        ordered.update(
+            index,
+            (
+                recording.get_traces(
+                    start_frame=index * 625,
+                    end_frame=(index + 1) * 625,
+                    return_in_uV=True,
+                ),
+            ),
+        )
+    np.testing.assert_array_equal(result.rate_hz, ordered.finish().rate_hz)
     assert np.any(result.rate_hz > 0)
     assert np.any(~result.healthy)
     np.testing.assert_allclose(
@@ -94,7 +105,7 @@ def test_known_supported_peak_and_artifact_veto():
     candidates = _supported_candidates(
         filtered,
         np.ones(32),
-        np.arange(32) * 20,
+        _neighbors(np.c_[np.zeros(32), np.arange(32) * 20], 40),
         sampling_rate=30000,
         threshold_sigma=4.5,
         support_sigma=3,
@@ -174,6 +185,74 @@ def test_bad_activity_configuration_fails_before_reads(metric, monkeypatch):
         _compute_all_metrics(block, window_duration=2, extra_metrics=(metric,))
 
 
+@pytest.mark.parametrize("separation", [(0, 700), (100, 0)])
+def test_distant_contacts_cannot_support_one_another(separation):
+    """Split-bank gaps and lateral distances cannot become array neighbors."""
+    locations = np.c_[np.zeros(32), np.arange(32) * 20.0]
+    locations[10] = (0, 0)
+    locations[11] = separation
+    filtered = np.zeros((201, 32), dtype=np.float32)
+    filtered[100, 10:12] = [-6, -4]
+    detected = _supported_candidates(
+        filtered,
+        np.ones(32),
+        _neighbors(locations, 40),
+        sampling_rate=30000,
+        threshold_sigma=4.5,
+        support_sigma=3,
+    )
+    assert not detected.any()
+
+
+def test_flat_peaks_count_once_and_refractory_uses_full_interval():
+    """A four-sample plateau is one event; peaks 0.4 ms apart compete."""
+    locations = np.c_[np.zeros(32), np.arange(32) * 20.0]
+    filtered = np.zeros((201, 32), dtype=np.float32)
+    filtered[50:54, 10:12] = [-6, -4]
+    filtered[100, 10:12] = [-6, -4]
+    filtered[112, 10:12] = [-7, -4]
+    detected = _supported_candidates(
+        filtered,
+        np.ones(32),
+        _neighbors(locations, 40),
+        sampling_rate=30000,
+        threshold_sigma=4.5,
+        support_sigma=3,
+    )
+    assert detected.sum() == 2
+    assert detected[112, 10] and not detected[100, 10]
+
+
+def test_detector_is_invariant_to_channel_order():
+    """Native trace order does not define spatial adjacency."""
+    locations = np.c_[np.zeros(32), np.arange(32) * 20.0]
+    filtered = np.zeros((201, 32), dtype=np.float32)
+    filtered[100, 10:12] = [-6, -4]
+    order = np.random.default_rng(4).permutation(32)
+
+    def detect(data, coords):
+        return _supported_candidates(
+            data,
+            np.ones(32),
+            _neighbors(coords, 40),
+            sampling_rate=30000,
+            threshold_sigma=4.5,
+            support_sigma=3,
+        )
+
+    np.testing.assert_array_equal(
+        detect(filtered, locations)[:, order],
+        detect(filtered[:, order], locations[order]),
+    )
+
+
+def test_health_noise_baseline_does_not_bridge_a_bank_gap():
+    """Uniform noise on a distant bank cannot reject a quiet bank."""
+    locations = np.c_[np.zeros(8), [0, 20, 40, 60, 1000, 1020, 1040, 1060]]
+    noise = np.tile([1, 1, 1, 1, 20, 20, 20, 20], (3, 1))
+    assert _health_mask(noise, _neighbors(locations, 200)).all()
+
+
 def test_trimmed_block_mean_keeps_coverage_as_descriptive_support():
     """Remove one rate from each tail without reducing analyzed duration."""
     source = SourceContext.from_recording(
@@ -192,6 +271,24 @@ def test_trimmed_block_mean_keeps_coverage_as_descriptive_support():
     np.testing.assert_allclose(
         result.sampled_seconds, 12 * plan.seconds_per_window
     )
+
+
+def test_support_neighbors_never_cross_shanks():
+    """Coincident probe-local coordinates on different shanks stay separate."""
+    source = SourceContext.from_recording(
+        reference_recording(), 625, np.array([0.0])
+    )
+    source = replace(source, locations=np.zeros_like(source.locations))
+    plan = SampleBudget(max_windows=1, seconds=0.25).resolve(source)
+    params = ActivityParams(lowpass_hz=1000)
+    accumulator = ActivityAccumulator(
+        source, plan, params, params.filter(2500)
+    )
+    for indices, neighbors in zip(
+        accumulator.groups, accumulator.support_neighbors, strict=True
+    ):
+        assert len(np.unique(source.shank_indices[indices])) == 1
+        assert all(len(nearby) == len(indices) for nearby in neighbors)
 
 
 def test_output_retains_overlap_pitch_columns_depth_and_missingness(tmp_path):

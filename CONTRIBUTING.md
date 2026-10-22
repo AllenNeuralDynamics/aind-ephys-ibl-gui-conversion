@@ -192,11 +192,11 @@ or cherry-picked under new hashes. Remote branches were not deleted.
 | Branch | Meaning and next step |
 | --- | --- |
 | `main` | Contains the sampled metric API (`685f3cd`), dependency reduction (`b954978`), revised execution guide (`74179f7`), and merged legacy-label recovery plus CI repairs from PR #45 (`134c507`). Start new work here. |
-| `test/activity-and-surface-lines` | Combines current main, `feat/brain-surface-lines-main`, and `feat/raw-activity-api` for testing both optional metrics together. Uses the activity API branch's original detector; the separate detector-corrections experiment is not included. See the README for the combined configuration. |
+| `test/activity-and-surface-lines` | Combines current main, `feat/brain-surface-lines-main`, and corrected `feat/raw-activity-api` for testing both optional metrics together. Includes physical support/noise neighborhoods, one event per flat peak, and full peak-spacing enforcement. See the README for the combined configuration. |
 | `feat/brain-surface-lines-main` | Port onto main's sampled API, including contact mapping and regression tests. Ready for real-data testing and integration; see [usage](docs/brain_surface_lines.md). Candidates still need calibration and downstream GUI integration. |
 | `feat/brain-surface-lines` | Original detector at `09976dd`, retained as the reference for testing the port. |
-| `feat/raw-activity-api` | Raw activity adapted to the sampled API, at `91e44a0`; checked out in the sibling `raw-activity-worktree`. This contains work beyond main. |
-| `experiment/raw-activity-detector-corrections` | Follow-up detector corrections at `8713500`, branching from the activity implementation at `ea025eb`: physical neighborhoods prevent distant banks supporting each other, flat peaks count once, and eligible events obey the full refractory interval. This is a separate development line from the later activity documentation commit. |
+| `feat/raw-activity-api` | Raw activity adapted to the sampled API, including the detector corrections from `8713500` and current main; checked out in the sibling `raw-activity-worktree`. This contains work beyond main. |
+| `experiment/raw-activity-detector-corrections` | Historical correction snapshot at `8713500`, now merged into `feat/raw-activity-api` and the combined test branch. Its validation notes document the changed event counts and scientific parameter choices. |
 
 Ben Hardcastle's [PR #45](https://github.com/AllenNeuralDynamics/aind-ephys-ibl-gui-conversion/pull/45)
 merged on October 21 as `134c507`, after fixes for optional curated inputs,
