@@ -3,8 +3,161 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
-from aind_ephys_ibl_gui_conversion.spikes import _find_analyzer_folder
+import numpy as np
+import pandas as pd
+import pytest
+import spikeinterface as si
+
+from aind_ephys_ibl_gui_conversion import spikes
+from aind_ephys_ibl_gui_conversion.spikes import (
+    _find_analyzer_folder,
+    _quality_metrics_with_labels,
+)
+
+
+def _make_sorting(properties=None, unit_ids=(1, 2)):
+    """Create real SI property arrays without recording dependencies."""
+    sorting = si.NumpySorting.from_unit_dict(
+        {unit: np.array([10 + i, 30 + i]) for i, unit in enumerate(unit_ids)},
+        sampling_frequency=30000,
+    )
+    for key, values in (properties or {}).items():
+        sorting.set_property(key, np.asarray(values))
+    return sorting
+
+
+def _make_analyzer(sorting):
+    """Provide deterministic converter extensions around a real sorting."""
+    metrics = pd.DataFrame({"snr": [4.0, 5.0]}, index=sorting.unit_ids)
+    n_spikes = sorting.to_spike_vector().size
+    locations = np.zeros(n_spikes, dtype=[("y", "float64")])
+    locations["y"] = 100.0
+    templates = np.zeros((2, 8, 2))
+    templates[:, 3, 0] = -10
+    templates[:, 5, 0] = 5
+    extensions = {
+        "quality_metrics": SimpleNamespace(get_data=lambda: metrics),
+        "spike_amplitudes": SimpleNamespace(
+            get_data=lambda: np.ones(n_spikes)
+        ),
+        "spike_locations": SimpleNamespace(get_data=lambda: locations),
+        "templates": SimpleNamespace(get_templates=lambda: templates),
+    }
+    return SimpleNamespace(
+        sorting=sorting,
+        unit_ids=sorting.unit_ids,
+        sampling_frequency=30000,
+        get_total_duration=lambda: 1000,
+        get_extension=extensions.__getitem__,
+    )
+
+
+def test_existing_labels_do_not_load_curated(tmp_path, monkeypatch):
+    """Multi-unit properties win even when a curated directory exists."""
+    sorting = _make_sorting(
+        {
+            "default_qc": [False, True],
+            "decoder_label": ["noise", "good"],
+            "unitrefine_label": ["ignored", "ignored"],
+        }
+    )
+    analyzer = _make_analyzer(sorting)
+    load = Mock(side_effect=AssertionError("Unexpected curated load"))
+    monkeypatch.setattr(spikes.si, "load", load)
+    result = _quality_metrics_with_labels(analyzer, tmp_path)
+    assert result["default_qc"].tolist() == [False, True]
+    assert result["unitrefine_label"].tolist() == ["noise", "good"]
+    assert list(analyzer.get_extension("quality_metrics").get_data()) == [
+        "snr"
+    ]
+    load.assert_not_called()
+
+
+def test_missing_curated_keeps_available_analyzer_labels(tmp_path):
+    """A missing optional folder leaves unknown labels absent."""
+    analyzer = _make_analyzer(
+        _make_sorting({"unitrefine_label": ["good", "noise"]})
+    )
+    result = _quality_metrics_with_labels(analyzer, tmp_path / "missing")
+    assert result["unitrefine_label"].tolist() == ["good", "noise"]
+    assert "default_qc" not in result
+
+
+def test_curated_fills_only_missing_labels(tmp_path, monkeypatch):
+    """Curated labels fill gaps, align by unit ID, and preserve false QC."""
+    analyzer = _make_analyzer(_make_sorting({"default_qc": [False, False]}))
+    original = analyzer.get_extension("quality_metrics").get_data()
+    original.sort_index(ascending=False, inplace=True)
+    curated = _make_sorting(
+        {"default_qc": [True, True], "decoder_label": ["good", "noise"]}
+    )
+    monkeypatch.setattr(spikes.si, "load", Mock(return_value=curated))
+    result = _quality_metrics_with_labels(analyzer, tmp_path)
+    assert result["default_qc"].tolist() == [False, False]
+    assert result["unitrefine_label"].tolist() == ["noise", "good"]
+    assert result["cluster_id.1"].tolist() == [2, 1]
+
+
+@pytest.mark.parametrize("unit_ids", [(2, 1), (1, 3)])
+def test_curated_unit_mismatch_is_explicit(tmp_path, monkeypatch, unit_ids):
+    """Reject reordered or different curated units before copying labels."""
+    analyzer = _make_analyzer(_make_sorting())
+    curated = _make_sorting(unit_ids=unit_ids)
+    monkeypatch.setattr(spikes.si, "load", Mock(return_value=curated))
+    with pytest.raises(ValueError, match="unit IDs do not match"):
+        _quality_metrics_with_labels(analyzer, tmp_path)
+
+
+@pytest.mark.parametrize("n_shanks", [1, 2])
+@pytest.mark.parametrize("has_curated", [False, True])
+def test_extract_spikes_optional_curated(
+    tmp_path, monkeypatch, n_shanks, has_curated
+):
+    """Single/multi-shank extraction saves labels without obsolete loaders."""
+    stream = "Record Node 104#Neuropix-PXI-100.ProbeA-AP"
+    sorting_folder = tmp_path / "sorted"
+    postprocessed = sorting_folder / "postprocessed"
+    postprocessed.mkdir(parents=True)
+    results = tmp_path / "results"
+    results.mkdir()
+    analyzers = {}
+    for shank in range(n_shanks):
+        suffix = f"_group{shank}" if n_shanks > 1 else ""
+        name = f"experiment1_{stream}_recording1{suffix}.zarr"
+        folder = postprocessed / name
+        folder.mkdir()
+        analyzers[folder] = _make_analyzer(_make_sorting())
+        if has_curated:
+            (sorting_folder / "curated" / name).mkdir(parents=True)
+    curated = _make_sorting(
+        {"default_qc": [False, True], "decoder_label": ["noise", "good"]}
+    )
+    load = Mock(return_value=curated)
+    monkeypatch.setattr(spikes.si, "load", load)
+    monkeypatch.setattr(spikes, "_load_analyzer", analyzers.__getitem__)
+    monkeypatch.setattr(
+        spikes.se, "get_neo_streams", lambda *args: ([stream], [0])
+    )
+    spikes.extract_spikes(
+        sorting_folder, results, session_folder=tmp_path / "raw"
+    )
+    output = results / "ProbeA"
+    metrics = pd.read_csv(output / "clusters.metrics.csv")
+    assert len(metrics) == n_shanks * 2
+    assert load.call_count == (n_shanks if has_curated else 0)
+    if has_curated:
+        assert metrics["default_qc"].tolist() == [False, True] * n_shanks
+        assert (
+            metrics["unitrefine_label"].tolist()
+            == ["noise", "good"] * n_shanks
+        )
+    else:
+        assert "default_qc" not in metrics
+        assert "unitrefine_label" not in metrics
+    assert np.load(output / "spikes.times.npy").size == n_shanks * 4
 
 
 class TestFindAnalyzerFolder(unittest.TestCase):

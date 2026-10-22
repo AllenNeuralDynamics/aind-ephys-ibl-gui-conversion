@@ -17,7 +17,7 @@ authors = [
 ]
 classifiers = ["Programming Language :: Python :: 3"]
 readme = "README.md"
-version = "0.6.0"
+version = "0.6.1"
 
 dependencies = [
     "aind-mri-utils",
@@ -59,7 +59,8 @@ target-version = "py310"
 extend-exclude = ["scratch"]
 
 [tool.ruff.lint]
-extend-select = ["Q", "RUF100", "C90", "I", "F", "E", "W", "UP", "PYI"]
+# Keep the documented rule set stable as Ruff expands its defaults.
+select = ["Q", "RUF100", "C90", "I", "F", "E", "W", "UP", "PYI"]
 mccabe = { max-complexity = 14 }
 
 [tool.codespell]

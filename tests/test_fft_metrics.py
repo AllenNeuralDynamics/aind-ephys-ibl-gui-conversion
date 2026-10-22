@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from probeinterface import Probe
 
 from aind_ephys_ibl_gui_conversion.channel_metadata import (
     build_channel_table,
@@ -73,7 +74,10 @@ def _make_synthetic_recording(
     if locations is None:
         locations = np.zeros((n_channels, 2))
         locations[:, 1] = np.arange(n_channels) * 20.0  # 20 um spacing
-    recording.set_property("location", locations)
+    probe = Probe(ndim=2, si_units="um")
+    probe.set_contacts(locations, shapes="circle", shape_params={"radius": 5})
+    probe.set_device_channel_indices(np.arange(n_channels))
+    recording.set_probe(probe, in_place=True)
 
     # Set channel group / shank metadata.
     if groups is None:
