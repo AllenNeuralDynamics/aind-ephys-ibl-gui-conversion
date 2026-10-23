@@ -1,8 +1,11 @@
 """Extract spike data from sorting results."""
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
+import numcodecs.pickles
 import numpy as np
 import pandas as pd
 import spikeinterface as si
@@ -58,6 +61,23 @@ def _find_analyzer_folder(
     return None
 
 
+@contextmanager
+def _allow_pickle_decode() -> Iterator[None]:
+    """Let numcodecs decode Pickle-encoded arrays inside this block only.
+
+    Zarr analyzers ``numcodecs.Pickle``-encode extension data that is not an
+    array, dict, list or dataframe, and recording or sorting provenance that is
+    not JSON-serializable; numcodecs >= 0.15.2 refuses to decode it without an
+    opt-in. Scoping it keeps every other zarr read guarded.
+    """
+    previous = getattr(numcodecs.pickles, "ALLOW_UNSAFE_PICKLE_DECODE", False)
+    numcodecs.pickles.ALLOW_UNSAFE_PICKLE_DECODE = True
+    try:
+        yield
+    finally:
+        numcodecs.pickles.ALLOW_UNSAFE_PICKLE_DECODE = previous
+
+
 def _load_analyzer(analyzer_folder: Path):
     """Load a sorting analyzer, falling back to the waveforms loader.
 
@@ -69,11 +89,18 @@ def _load_analyzer(analyzer_folder: Path):
     Returns
     -------
     The loaded sorting analyzer.
+
+    Notes
+    -----
+    The analyzers come from our own sorting pipeline, so their pickled
+    extension data is trusted. Extensions load eagerly here, so no Pickle
+    decode happens after this returns.
     """
-    if analyzer_folder.suffix == ".zarr":
-        analyzer = si.load_sorting_analyzer(analyzer_folder)
-    else:
-        analyzer = si.load_sorting_analyzer_or_waveforms(analyzer_folder)
+    with _allow_pickle_decode():
+        if analyzer_folder.suffix == ".zarr":
+            analyzer = si.load_sorting_analyzer(analyzer_folder)
+        else:
+            analyzer = si.load_sorting_analyzer_or_waveforms(analyzer_folder)
     return analyzer
 
 

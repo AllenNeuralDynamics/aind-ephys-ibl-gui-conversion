@@ -81,27 +81,14 @@ per-band RMS, PSD, and coherence files in IBL ALF format.
 | `rms_window_duration` | `4.0` | Length of each analysis window (s) |
 | `num_parallel_jobs` | `4` | Concurrent block processing |
 | `coherence_block_source` | `"all"` | Blocks contributing to correlation/coherency: `"all"`, `"main"`, or `"surface"`. PSD, RMS, and channel metadata still use all blocks. |
-| `extra_metrics` | `()` | Optional [metric extensions](docs/metric_extensions.md) sharing the existing sampled reads and FFTs |
+| `extra_metrics` | `None` | [Metric extensions](docs/metric_extensions.md) sharing the existing sampled reads and FFTs; `None` runs `DEFAULT_EXTRA_METRICS` (raw activity), a tuple replaces them, `()` runs none |
 
-The optional [brain surface line detector](docs/brain_surface_lines.md)
-adds interference amplitudes and surface candidates through `extra_metrics`.
+Per-contact AP event rates ([raw activity](docs/raw_activity.md)) run by
+default and share recording reads with the other metrics.
 
-For optional per-contact AP event rates, see
-[raw activity](docs/raw_activity.md). Enable it through `extra_metrics`; it
-shares recording reads with the default metrics.
-
-On `test/activity-and-surface-lines`, enable both experimental metrics:
-
-```python
-from aind_ephys_ibl_gui_conversion.activity import raw_activity
-from aind_ephys_ibl_gui_conversion.surface_lines import brain_surface_lines
-
-extract_continuous(
-    sorting_folder,
-    results_folder,
-    extra_metrics=(raw_activity(), brain_surface_lines()),
-)
-```
+On `test/activity-and-surface-lines`, `DEFAULT_EXTRA_METRICS` also holds the
+[brain surface line detector](docs/brain_surface_lines.md), so callers that
+omit `extra_metrics` get interference amplitudes and surface candidates too.
 
 Coherence bands (from `metrics.COHERENCE_BANDS`):
 

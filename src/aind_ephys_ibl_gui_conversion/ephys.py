@@ -10,6 +10,7 @@ from pathlib import Path
 
 import scipy.fft
 
+from aind_ephys_ibl_gui_conversion.activity import raw_activity
 from aind_ephys_ibl_gui_conversion.io import (
     _assemble_and_save_stream,
     _save_channel_metadata,
@@ -77,6 +78,20 @@ __all__ = [
 ]
 
 
+#: Extension metrics ``extract_continuous`` runs when the caller names none.
+DEFAULT_EXTRA_METRICS: tuple[WindowMetric, ...] = (raw_activity(),)
+
+
+def _resolve_extra_metrics(
+    extra_metrics: tuple[WindowMetric, ...] | None,
+) -> tuple[WindowMetric, ...]:
+    """Substitute the defaults for ``None`` and validate the result."""
+    if extra_metrics is None:
+        extra_metrics = DEFAULT_EXTRA_METRICS
+    validate_metrics(extra_metrics)
+    return extra_metrics
+
+
 def _results_in_block_order(
     stream: ProbeStream,
     all_results: list[tuple[ProbeStream, BlockMetrics]],
@@ -139,7 +154,7 @@ def extract_continuous(
     lfp_correlation_num_bins: int = 5,
     lfp_bandpass_margin_ms: float = 3000.0,
     coherence_block_source: CoherenceBlockSource = "all",
-    extra_metrics: tuple[WindowMetric, ...] = (),
+    extra_metrics: tuple[WindowMetric, ...] | None = None,
 ):
     """Extract QC metrics from raw ephys data using FFT-based computation.
 
@@ -178,11 +193,13 @@ def extract_continuous(
     coherence_block_source : {"all", "main", "surface"}
         Block provenance used to aggregate correlation and coherency. Other
         metrics and channel metadata continue to use all blocks.
-    extra_metrics : tuple[WindowMetric, ...]
-        Opt-in immutable metric configurations. Each block creates its own
-        accumulator; stream adapters pool results after workers finish.
+    extra_metrics : tuple[WindowMetric, ...] or None
+        Immutable metric configurations beyond the built-in QC metrics.
+        ``None`` runs :data:`DEFAULT_EXTRA_METRICS`; a tuple replaces them, so
+        ``()`` runs none. Each block creates its own accumulator; stream
+        adapters pool results after workers finish.
     """
-    validate_metrics(extra_metrics)
+    extra_metrics = _resolve_extra_metrics(extra_metrics)
     if session_folder is None:
         session_folder = Path(str(sorting_folder).split("_sorted")[0])
     if coherence_block_source not in {"all", "main", "surface"}:

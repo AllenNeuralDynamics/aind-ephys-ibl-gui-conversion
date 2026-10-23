@@ -37,12 +37,15 @@ wheels = [
 
 [[package]]
 name = "aind-ephys-ibl-gui-conversion"
-version = "0.6.1"
+version = "0.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "aind-mri-utils" },
     { name = "antspyx" },
     { name = "iblatlas" },
+    { name = "numcodecs", version = "0.13.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numcodecs", version = "0.15.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' and python_full_version < '3.14'" },
+    { name = "numcodecs", version = "0.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14'" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "one-api" },
@@ -85,6 +88,7 @@ requires-dist = [
     { name = "aind-mri-utils" },
     { name = "antspyx", specifier = ">=0.4.2" },
     { name = "iblatlas" },
+    { name = "numcodecs", specifier = ">=0.13.1" },
     { name = "numpy" },
     { name = "one-api", specifier = ">=2.6.0" },
     { name = "pandas", specifier = ">=2.3.3" },

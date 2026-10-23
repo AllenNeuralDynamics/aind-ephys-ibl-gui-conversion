@@ -17,7 +17,7 @@ authors = [
 ]
 classifiers = ["Programming Language :: Python :: 3"]
 readme = "README.md"
-version = "0.6.1"
+version = "0.7.0"
 
 dependencies = [
     "aind-mri-utils",
@@ -30,6 +30,7 @@ dependencies = [
     "pandas>=2.3.3",
     "scipy>=1.15.3",
     "spikeinterface[metrics]>=0.104.0",
+    "numcodecs>=0.13.1",
 ]
 
 [project.urls]

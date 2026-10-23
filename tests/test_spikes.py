@@ -6,10 +6,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import numcodecs
+import numcodecs.pickles
 import numpy as np
 import pandas as pd
 import pytest
 import spikeinterface as si
+import zarr
 
 from aind_ephys_ibl_gui_conversion import spikes
 from aind_ephys_ibl_gui_conversion.spikes import (
@@ -273,3 +276,38 @@ class TestFindAnalyzerFolder(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@pytest.mark.skipif(
+    not hasattr(numcodecs.pickles, "ALLOW_UNSAFE_PICKLE_DECODE"),
+    reason="numcodecs predates the Pickle decode opt-in",
+)
+def test_load_analyzer_decodes_pickled_extension_data(tmp_path, monkeypatch):
+    """Pickled extension data loads, and the opt-in does not leak out."""
+    monkeypatch.setattr(numcodecs.pickles, "ALLOW_UNSAFE_PICKLE_DECODE", False)
+    recording, sorting = si.generate_ground_truth_recording(
+        durations=[1.0], num_channels=4, num_units=2, seed=0
+    )
+    folder = tmp_path / "analyzer.zarr"
+    analyzer = si.create_sorting_analyzer(
+        sorting, recording, format="zarr", folder=folder, sparse=False
+    )
+    analyzer.compute("noise_levels")
+    # Mirrors how SpikeInterface stores extension data it cannot JSON-encode.
+    group = zarr.open_group(str(folder), mode="a")["extensions/noise_levels"]
+    group.create_dataset(
+        "pickled",
+        data=np.array([frozenset({1, 2})], dtype=object),
+        object_codec=numcodecs.Pickle(),
+    )
+    group["pickled"].attrs["object"] = True
+    zarr.consolidate_metadata(str(folder))
+
+    with pytest.raises(numcodecs.errors.UnsafeDecodeError):
+        si.load_sorting_analyzer(folder)
+
+    loaded = spikes._load_analyzer(folder)
+
+    ext = loaded.get_extension("noise_levels")
+    assert ext.data["pickled"] == frozenset({1, 2})
+    assert numcodecs.pickles.ALLOW_UNSAFE_PICKLE_DECODE is False

@@ -109,7 +109,9 @@ extract_continuous(
 ```
 
 Replace the paths with your data; see the [input layout](../README.md#input-data-expectations).
-The usual metrics continue to run. Your metric adds three files in each
+The built-in QC metrics continue to run. A tuple replaces
+`DEFAULT_EXTRA_METRICS`, so raw activity is skipped unless the tuple includes
+`*DEFAULT_EXTRA_METRICS`. Your metric adds three files in each
 probe's output folder:
 
 ```text
