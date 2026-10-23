@@ -283,7 +283,7 @@ if __name__ == "__main__":
     reason="numcodecs predates the Pickle decode opt-in",
 )
 def test_load_analyzer_decodes_pickled_extension_data(tmp_path, monkeypatch):
-    """Pickled dict extension data loads, and the opt-in does not leak out."""
+    """Pickled extension data loads, and the opt-in does not leak out."""
     monkeypatch.setattr(numcodecs.pickles, "ALLOW_UNSAFE_PICKLE_DECODE", False)
     recording, sorting = si.generate_ground_truth_recording(
         durations=[1.0], num_channels=4, num_units=2, seed=0
@@ -293,14 +293,14 @@ def test_load_analyzer_decodes_pickled_extension_data(tmp_path, monkeypatch):
         sorting, recording, format="zarr", folder=folder, sparse=False
     )
     analyzer.compute("noise_levels")
-    # Mirrors how SpikeInterface stores dict-valued extension data.
+    # Mirrors how SpikeInterface stores extension data it cannot JSON-encode.
     group = zarr.open_group(str(folder), mode="a")["extensions/noise_levels"]
     group.create_dataset(
-        "params_dict",
-        data=np.array([{"key": 1}], dtype=object),
+        "pickled",
+        data=np.array([frozenset({1, 2})], dtype=object),
         object_codec=numcodecs.Pickle(),
     )
-    group["params_dict"].attrs["dict"] = True
+    group["pickled"].attrs["object"] = True
     zarr.consolidate_metadata(str(folder))
 
     with pytest.raises(numcodecs.errors.UnsafeDecodeError):
@@ -309,5 +309,5 @@ def test_load_analyzer_decodes_pickled_extension_data(tmp_path, monkeypatch):
     loaded = spikes._load_analyzer(folder)
 
     ext = loaded.get_extension("noise_levels")
-    assert ext.data["params_dict"] == {"key": 1}
+    assert ext.data["pickled"] == frozenset({1, 2})
     assert numcodecs.pickles.ALLOW_UNSAFE_PICKLE_DECODE is False

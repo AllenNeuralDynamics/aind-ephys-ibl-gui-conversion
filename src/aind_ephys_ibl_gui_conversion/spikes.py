@@ -65,9 +65,10 @@ def _find_analyzer_folder(
 def _allow_pickle_decode() -> Iterator[None]:
     """Let numcodecs decode Pickle-encoded arrays inside this block only.
 
-    SpikeInterface stores dict-valued extension data and provenance in zarr
-    analyzers with ``numcodecs.Pickle``, which numcodecs >= 0.15.2 refuses to
-    decode without an opt-in. Scoping it keeps every other zarr read guarded.
+    Zarr analyzers ``numcodecs.Pickle``-encode extension data that is not an
+    array, dict, list or dataframe, and recording or sorting provenance that is
+    not JSON-serializable; numcodecs >= 0.15.2 refuses to decode it without an
+    opt-in. Scoping it keeps every other zarr read guarded.
     """
     previous = getattr(numcodecs.pickles, "ALLOW_UNSAFE_PICKLE_DECODE", False)
     numcodecs.pickles.ALLOW_UNSAFE_PICKLE_DECODE = True
