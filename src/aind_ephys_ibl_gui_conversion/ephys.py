@@ -82,6 +82,16 @@ __all__ = [
 DEFAULT_EXTRA_METRICS: tuple[WindowMetric, ...] = (raw_activity(),)
 
 
+def _resolve_extra_metrics(
+    extra_metrics: tuple[WindowMetric, ...] | None,
+) -> tuple[WindowMetric, ...]:
+    """Substitute the defaults for ``None`` and validate the result."""
+    if extra_metrics is None:
+        extra_metrics = DEFAULT_EXTRA_METRICS
+    validate_metrics(extra_metrics)
+    return extra_metrics
+
+
 def _results_in_block_order(
     stream: ProbeStream,
     all_results: list[tuple[ProbeStream, BlockMetrics]],
@@ -189,9 +199,7 @@ def extract_continuous(
         ``()`` runs none. Each block creates its own accumulator; stream
         adapters pool results after workers finish.
     """
-    if extra_metrics is None:
-        extra_metrics = DEFAULT_EXTRA_METRICS
-    validate_metrics(extra_metrics)
+    extra_metrics = _resolve_extra_metrics(extra_metrics)
     if session_folder is None:
         session_folder = Path(str(sorting_folder).split("_sorted")[0])
     if coherence_block_source not in {"all", "main", "surface"}:
