@@ -181,7 +181,10 @@ def test_invalid_registration_fails_before_recording_reads(monkeypatch):
 def test_concurrent_extraction_registers_and_saves_optional_metric(
     monkeypatch, tmp_path
 ):
-    """Public extraction carries extensions through workers and assembly."""
+    """Public extraction carries extensions through workers and assembly.
+
+    Omitting ``extra_metrics`` runs the defaults; ``()`` runs none.
+    """
     import aind_ephys_ibl_gui_conversion.ephys as ephys
 
     blocks = [make_block("np2"), make_block("np2")]
@@ -198,6 +201,7 @@ def test_concurrent_extraction_registers_and_saves_optional_metric(
     monkeypatch.setattr(ephys.os, "cpu_count", lambda: 2)
     for name, metrics in (
         ("old", ()),
+        ("default", None),
         (
             "new",
             (
@@ -223,6 +227,10 @@ def test_concurrent_extraction_registers_and_saves_optional_metric(
         )
     old, new = tmp_path / "old" / "probe", tmp_path / "new" / "probe"
     assert not (old / "_iblqc_channels.lfpBandPower.npy").exists()
+    assert not (old / "_iblqc_channels.rawActivity.npy").exists()
+    default = tmp_path / "default" / "probe"
+    assert np.load(default / "_iblqc_channels.rawActivity.npy").shape == (6,)
+    assert not (new / "_iblqc_channels.rawActivity.npy").exists()
     for path in old.rglob("*.npy"):
         before, after = np.load(path), np.load(new / path.relative_to(old))
         if before.dtype.kind in "OUS":

@@ -2,16 +2,18 @@
 
 Raw activity measures supported negative-event rates in AP traces. It is a
 spatial activity proxy: several contacts can detect the same event, and rates
-do not count distinct neurons. Enable it alongside the default metrics:
+do not count distinct neurons. `extract_continuous` runs it by default as part
+of `DEFAULT_EXTRA_METRICS`. Pass a configured instance to change its
+parameters, or `extra_metrics=()` to skip it:
 
 ```python
 from aind_ephys_ibl_gui_conversion import extract_continuous
-from aind_ephys_ibl_gui_conversion.activity import raw_activity
+from aind_ephys_ibl_gui_conversion.activity import ActivityParams, raw_activity
 
 extract_continuous(
     sorting_folder=sorting_folder,
     results_folder=results_folder,
-    extra_metrics=(raw_activity(),),
+    extra_metrics=(raw_activity(params=ActivityParams(threshold_sigma=5.0)),),
 )
 ```
 

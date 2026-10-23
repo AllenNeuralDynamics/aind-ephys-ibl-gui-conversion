@@ -81,11 +81,10 @@ per-band RMS, PSD, and coherence files in IBL ALF format.
 | `rms_window_duration` | `4.0` | Length of each analysis window (s) |
 | `num_parallel_jobs` | `4` | Concurrent block processing |
 | `coherence_block_source` | `"all"` | Blocks contributing to correlation/coherency: `"all"`, `"main"`, or `"surface"`. PSD, RMS, and channel metadata still use all blocks. |
-| `extra_metrics` | `()` | Optional [metric extensions](docs/metric_extensions.md) sharing the existing sampled reads and FFTs |
+| `extra_metrics` | `None` | [Metric extensions](docs/metric_extensions.md) sharing the existing sampled reads and FFTs; `None` runs `DEFAULT_EXTRA_METRICS` (raw activity), a tuple replaces them, `()` runs none |
 
-For optional per-contact AP event rates, see
-[raw activity](docs/raw_activity.md). Enable it through `extra_metrics`; it
-shares recording reads with the default metrics.
+Per-contact AP event rates ([raw activity](docs/raw_activity.md)) run by
+default and share recording reads with the other metrics.
 
 Coherence bands (from `metrics.COHERENCE_BANDS`):
 

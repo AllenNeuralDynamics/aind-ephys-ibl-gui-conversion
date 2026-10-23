@@ -9,8 +9,9 @@ for each metric in each block. A block contains one retained recording segment
 from an Open Ephys experiment within a probe stream.
 
 This guide describes the extension API implemented in this checkout. Existing
-QC metrics run by default; callers enable additional metrics with
-`extra_metrics`.
+QC metrics and `DEFAULT_EXTRA_METRICS` (raw activity) run by default; a
+caller's `extra_metrics` tuple replaces `DEFAULT_EXTRA_METRICS`, so include it
+to keep raw activity.
 
 ## Callers select metrics through `extra_metrics`
 
@@ -22,6 +23,7 @@ session must contain `ecephys_compressed`; see the
 from pathlib import Path
 
 from aind_ephys_ibl_gui_conversion import extract_continuous
+from aind_ephys_ibl_gui_conversion.ephys import DEFAULT_EXTRA_METRICS
 from aind_ephys_ibl_gui_conversion.metric_extensions import lfp_band_power
 
 results = Path("/results")
@@ -31,7 +33,10 @@ extract_continuous(
     sorting_folder=Path("/data/session_sorted"),
     session_folder=Path("/data/session"),
     results_folder=results,
-    extra_metrics=(lfp_band_power(low_hz=30, high_hz=100),),
+    extra_metrics=(
+        *DEFAULT_EXTRA_METRICS,
+        lfp_band_power(low_hz=30, high_hz=100),
+    ),
 )
 ```
 
