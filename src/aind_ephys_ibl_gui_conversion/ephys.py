@@ -41,6 +41,7 @@ from aind_ephys_ibl_gui_conversion.recording_utils import (
     merge_probe_streams,
 )
 from aind_ephys_ibl_gui_conversion.spikes import extract_spikes
+from aind_ephys_ibl_gui_conversion.surface_lines import brain_surface_lines
 from aind_ephys_ibl_gui_conversion.types import (
     BlockMetrics,
     ExperimentBlock,
@@ -79,7 +80,10 @@ __all__ = [
 
 
 #: Extension metrics ``extract_continuous`` runs when the caller names none.
-DEFAULT_EXTRA_METRICS: tuple[WindowMetric, ...] = (raw_activity(),)
+DEFAULT_EXTRA_METRICS: tuple[WindowMetric, ...] = (
+    raw_activity(),
+    brain_surface_lines(),
+)
 
 
 def _resolve_extra_metrics(
