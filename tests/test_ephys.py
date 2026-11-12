@@ -5,10 +5,14 @@ import unittest
 from collections import defaultdict
 from pathlib import Path
 
+import numpy as np
 import spikeinterface as si
 from spikeinterface.extractors import toy_example
 
-from aind_ephys_ibl_gui_conversion.ephys import _results_in_block_order
+from aind_ephys_ibl_gui_conversion.ephys import (
+    _results_in_block_order,
+    _skip_short_blocks,
+)
 from aind_ephys_ibl_gui_conversion.io import load_probe_streams
 from aind_ephys_ibl_gui_conversion.recording_utils import (
     _merge_separate_asset_recording_dicts,
@@ -227,6 +231,51 @@ def _block_metrics(block):
         psd_freqs=None,
         shank_channels=None,
     )
+
+
+class TestShortBlocks(unittest.TestCase):
+    """Short acquisition fragments cannot supply a full FFT window."""
+
+    @staticmethod
+    def _stream(durations):
+        """Build a stream with small in-memory recordings."""
+        blocks = [
+            ExperimentBlock(
+                recording=si.NumpyRecording(
+                    np.zeros((duration * 100, 1), dtype=np.float32),
+                    sampling_frequency=100,
+                ),
+                lfp_recording=None,
+                block_index=index,
+            )
+            for index, duration in enumerate(durations)
+        ]
+        return ProbeStream("ProbeB", "ProbeB", blocks, Path("/tmp/unused"))
+
+    def test_skips_short_block_and_retains_long_blocks(self):
+        """A two-second fragment does not prevent later blocks running."""
+        stream = self._stream([10, 2, 4])
+        with self.assertLogs(level="WARNING") as logs:
+            _skip_short_blocks([stream], 4)
+        self.assertEqual([b.block_index for b in stream.blocks], [0, 2])
+        self.assertIn("ProbeB block 1 (2.000s)", logs.output[0])
+
+    def test_all_short_blocks_fail_clearly(self):
+        """A stream with no usable windows reports its real problem."""
+        stream = self._stream([2])
+        with self.assertRaisesRegex(ValueError, "No blocks in ProbeB"):
+            _skip_short_blocks([stream], 4)
+
+    def test_short_paired_lfp_skips_entire_block(self):
+        """NP1 needs a complete window from both AP and LFP sources."""
+        stream = self._stream([10, 10])
+        stream.blocks[0].lfp_recording = si.NumpyRecording(
+            np.zeros((100, 1), dtype=np.float32), sampling_frequency=50
+        )
+        with self.assertLogs(level="WARNING") as logs:
+            _skip_short_blocks([stream], 4)
+        self.assertEqual([b.block_index for b in stream.blocks], [1])
+        self.assertIn("block 0 (2.000s)", logs.output[0])
 
 
 class TestSurfaceFindingBlockCounts(unittest.TestCase):
