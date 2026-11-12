@@ -24,6 +24,12 @@ samples time windows throughout that block's recording. The default windows
 are four seconds long, spaced at most 30 seconds apart; short recordings use
 a shorter interval, subject to the window length.
 
+Blocks shorter than one analysis window are skipped with a warning before
+workers start. For NP1, both AP and paired LFP recordings must fit a full
+window. Skipped blocks contribute no metrics or channel coverage. A stream
+with no usable blocks raises an error, as does a requested main/surface
+coherency source with no remaining matching blocks.
+
 These are three different units: an experiment block is a recording task, a
 time window is a sampled interval within that recording, and a storage chunk
 is the underlying Zarr/WavPack read unit. A short requested interval may still

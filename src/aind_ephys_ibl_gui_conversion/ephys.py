@@ -132,6 +132,45 @@ def _results_in_block_order(
     return [by_block[id(block)] for block in stream.blocks]
 
 
+def _skip_short_blocks(
+    streams: list[ProbeStream], window_duration: float
+) -> None:
+    """Remove blocks that cannot provide a full analysis window."""
+    for stream in streams:
+        usable_blocks = []
+        for block in stream.blocks:
+            sources = [
+                source
+                for source in (block.recording, block.lfp_recording)
+                if source is not None
+            ]
+            if any(
+                source.get_num_samples()
+                < int(window_duration * source.get_sampling_frequency())
+                for source in sources
+            ):
+                logging.warning(
+                    "[FFT] Skipping %s block %s (%.3fs): shorter than "
+                    "the %.3fs analysis window",
+                    stream.stream_name,
+                    block.block_index,
+                    min(
+                        source.get_num_samples()
+                        / source.get_sampling_frequency()
+                        for source in sources
+                    ),
+                    window_duration,
+                )
+                continue
+            usable_blocks.append(block)
+        if not usable_blocks:
+            raise ValueError(
+                f"No blocks in {stream.stream_name} are long enough "
+                f"for the {window_duration:g}s analysis window"
+            )
+        stream.blocks = usable_blocks
+
+
 def extract_continuous(
     sorting_folder: Path,
     results_folder: Path,
@@ -180,6 +219,9 @@ def extract_continuous(
         Maximum interval in seconds between windows.
     rms_window_duration : float
         Duration of each window in seconds (LFP metrics + RMS).
+        Blocks whose AP or paired LFP source is shorter than one window
+        are skipped with a warning. A stream with no usable blocks raises
+        ``ValueError``.
     num_parallel_jobs : int
         Number of blocks to process in parallel.
     session_folder : Path or None
@@ -274,6 +316,8 @@ def extract_continuous(
             block_source="surface",
         )
         streams = merge_probe_streams(streams, surface_streams)
+
+    _skip_short_blocks(streams, rms_window_duration)
 
     if coherence_block_source != "all":
         missing = [
