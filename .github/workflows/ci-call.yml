@@ -20,7 +20,9 @@ jobs:
   run-ci:
     strategy:
       matrix:
-        os: [ubuntu-latest]
+        # wavpack-numcodecs ships only an sdist that links bundled libwavpack builds for glibc 2.35/2.39;
+        # ubuntu-latest (26.04, glibc 2.43) fails to build it. Return to ubuntu-latest once it installs there.
+        os: [ubuntu-24.04]
         python-version: ["3.10", "3.13"]
 
     if: >
