@@ -22,7 +22,6 @@ version = "0.7.0"
 dependencies = [
     "aind-mri-utils",
     "antspyx>=0.4.2",
-    "iblatlas",
     "one-api>=2.6.0",
     "tqdm>=4.66.1",
     "wavpack-numcodecs",

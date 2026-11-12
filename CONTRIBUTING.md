@@ -169,7 +169,6 @@ Open Ephys stream IDs follow
   dependencies.
 - **pandas, scipy** -- Direct dependencies for spike metadata tables and
   continuous-signal calculations
-- **iblatlas** -- Atlas transforms
 - **one-api** >= 2.6.0 -- IBL data API
 - **antspyx** >= 0.4.2 -- Used by `histology.py` only
 - **aind-mri-utils** -- Probe trajectory fitting in `histology.py`
