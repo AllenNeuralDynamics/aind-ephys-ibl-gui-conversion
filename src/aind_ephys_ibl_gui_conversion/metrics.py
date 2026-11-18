@@ -58,7 +58,7 @@ CoherenceBlockSource = Literal["all", "main", "surface"]
 def block_source(
     block: ExperimentBlock,
     main_recording_min_secs: float = 600.0,
-) -> Literal["main", "surface"]:
+) -> Literal["main", "surface", "unknown"]:
     """Return explicit block provenance, with a duration fallback."""
     if block.source is not None:
         return block.source

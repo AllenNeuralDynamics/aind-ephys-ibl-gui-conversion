@@ -508,13 +508,10 @@ def _assemble_and_save_stream(
         Optional adapters receiving all block results in stream block order.
     """
     output_folder = stream.output_folder
-    output_folder.mkdir(exist_ok=True)
+    output_folder.mkdir(parents=True, exist_ok=True)
 
-    # Find the main block result (longest recording)
-    main_result = max(
-        results,
-        key=lambda r: r.block.duration,
-    )
+    # Preserve an explicit main choice; legacy streams use the longest block.
+    main_result = next(r for r in results if r.block is stream.main_block)
 
     # Canonical row map for the main block, so its RMS columns are saved on
     # channel-table rows rather than block-local ones.
@@ -525,7 +522,7 @@ def _assemble_and_save_stream(
         if r is main_result
     )
 
-    if stream.has_surface:
+    if stream.has_multiple_blocks:
         # Combined: probe summary RMS + coherence + channel metadata
         _save_combined_rms_summary(output_folder, results)
         _save_spectral_outputs(
@@ -624,7 +621,7 @@ def process_stream_fft(
     saves output files.  Used by tests; the main code path
     goes through ``_process_block`` in ``extract_continuous``.
     """
-    output_folder.mkdir(exist_ok=True)
+    output_folder.mkdir(parents=True, exist_ok=True)
 
     metrics = _compute_all_metrics(
         block,

@@ -102,9 +102,11 @@ available so display interpolation cannot conceal unsupported regions.
 
 1. If every channel has a valid prefixed contact ID such as `s2e17`, use its
    physical shank prefix (`2`), preserving potentially non-contiguous IDs.
-2. Otherwise normalize SpikeInterface `group` values to contiguous zero-based
+2. Otherwise project explicit numeric probe `shank_ids` through device channel
+   indices, preserving sparse physical IDs.
+3. Otherwise normalize SpikeInterface `group` values to contiguous zero-based
    indices in sorted unique-value order.
-3. If groups are absent, use one shank (`0`).
+4. If groups are absent, use one shank (`0`).
 
 Contact IDs come from the recording property or attached probe, projected into
 recording order through device channel indices when possible. Incomplete or
@@ -165,8 +167,9 @@ records per-track `histology_shank` and `ephys_shank` in `xyz_picks`.
 The split stream may retain contact IDs such as `s3e17`; its one-shank table
 normalizes to local shank 0. Histology filenames can have one-based physical
 shank suffixes; never infer ephys membership from them. Spike/unit shank
-vectors come separately from sorting-analyzer enumeration and do not replace
-the per-channel shank table.
+vectors use physical peak-channel shanks during planned extraction. Legacy
+extraction derives them from analyzer enumeration. Neither replaces the
+per-channel shank table.
 
 ## Compatibility And Review
 
@@ -182,3 +185,8 @@ Review `channel_metadata.py`, `metrics.py`, and `io.py`; preprocessing's
 Existing coverage includes `tests/test_fft_metrics.py` and GUI ephys-data,
 geometry, and LFP-correlation tests. Check surface/main overlap, non-depth-sorted
 channels, and split-stream identity when changing this contract.
+
+Planned spike extraction maps `clusters.channels.npy` onto channel-table rows
+and stores peak waveforms as `(units, samples, 1)`. Companion files
+`clusters.waveformChannels.npy` and `clusters.waveformTimes.npy` give channel
+rows and the common sample-zero time axis. See [the execution contract](conversion_plan.md#extraction-contract).

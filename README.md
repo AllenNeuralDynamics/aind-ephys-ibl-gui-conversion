@@ -98,6 +98,16 @@ Coherence bands (from `metrics.COHERENCE_BANDS`):
 
 ## Input data expectations
 
+Discovery can inventory heterogeneous experiment/stream membership through the
+metadata-only [inventory API and versioned contract](docs/ephys_inventory.md).
+It retains recording geometry, sorting outputs, candidate source joins, and
+validation findings. A separate saved plan controls worker extraction.
+
+The [conversion-plan layer](docs/conversion_plan.md) selects the longest
+recorded block by default and keeps its analyzer family together. It records
+overrides, missing physical shanks, and ambiguous sources. Workers validate
+and execute the saved plan for both spike and continuous extraction.
+
 Both entry points expect the AIND session layout:
 
 ```

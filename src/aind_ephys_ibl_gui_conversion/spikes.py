@@ -1,9 +1,17 @@
 """Extract spike data from sorting results."""
 
+from __future__ import annotations
+
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from aind_ephys_ibl_gui_conversion.planned_extraction import (
+        PlannedExtraction,
+    )
 
 import numcodecs.pickles
 import numpy as np
@@ -149,6 +157,7 @@ def extract_spikes(  # noqa: C901
     stream_to_use: str | None = None,
     min_duration_secs: int = 300,
     session_folder: Path | None = None,
+    execution: PlannedExtraction | None = None,
 ):
     """Extract spike data from a sorting folder.
 
@@ -164,6 +173,8 @@ def extract_spikes(  # noqa: C901
         ``"ProbeA"``); the token also selects the paired LFP stream.
     min_duration_secs : int
         Minimum duration (seconds) for spike extraction.
+    execution : PlannedExtraction or None
+        Prevalidated saved decisions and mounted inputs; bypasses discovery.
     session_folder : Path or None
         Raw session folder holding ``ecephys_clipped``/``ecephys_compressed``,
         used to enumerate the recording's streams. When ``None`` it is derived
@@ -172,6 +183,14 @@ def extract_spikes(  # noqa: C901
         not siblings -- e.g. mounted under fixed pipeline slots -- so the raw
         session is located by name/content instead of a path assumption.
     """
+    if execution is not None:
+        from aind_ephys_ibl_gui_conversion.planned_spikes import (
+            extract_planned_spikes,
+        )
+
+        execution.check_request(stream_to_use)
+        return extract_planned_spikes(execution)
+
     if session_folder is None:
         session_folder = Path(str(sorting_folder).split("_sorted")[0])
 

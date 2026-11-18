@@ -65,6 +65,8 @@ mccabe = { max-complexity = 14 }
 
 [tool.codespell]
 skip = ".git,*.pdf,*.svg,./docs/build,uv.lock,scratch"
+# Versioned inventory field naming multiple independent sorting results.
+ignore-words-list = "sortings"
 
 [tool.pytest.ini_options]
 addopts = "--strict-markers --tb=short --cov=src --cov-report=term-missing --cov-fail-under=0"

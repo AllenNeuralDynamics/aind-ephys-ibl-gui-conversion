@@ -79,7 +79,7 @@ class BlockContext:
     """Resolved scheduling and shared transform contracts for one block."""
 
     block_index: int
-    block_source: Literal["main", "surface"]
+    block_source: Literal["main", "surface", "unknown"]
     duration_seconds: float
     window_starts_seconds: np.ndarray
     timestamps: np.ndarray
