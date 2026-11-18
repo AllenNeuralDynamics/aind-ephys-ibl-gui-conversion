@@ -61,6 +61,10 @@ def normalized_channel_groups(recording: si.BaseRecording) -> np.ndarray:
     if contact_shanks is not None:
         return contact_shanks
 
+    probe_shanks = _physical_probe_shanks(recording)
+    if probe_shanks is not None:
+        return probe_shanks
+
     try:
         groups = recording.get_property("group")
     except Exception:
@@ -79,6 +83,26 @@ def normalized_channel_groups(recording: si.BaseRecording) -> np.ndarray:
 
     _, normalized = np.unique(group_array, return_inverse=True)
     return normalized.astype(np.int64, copy=False)
+
+
+def _physical_probe_shanks(recording: si.BaseRecording) -> np.ndarray | None:
+    """Project explicit probe shank IDs, preserving sparse identities."""
+    try:
+        contacts = recording.get_probegroup().to_numpy(complete=True)
+        devices = np.asarray(contacts["device_channel_indices"])
+        active = devices >= 0
+        devices = devices[active]
+        values = np.asarray(contacts["shank_ids"])[active].astype(str)
+    except (AttributeError, ValueError, KeyError):
+        return None
+    count = recording.get_num_channels()
+    if (
+        len(devices) != count
+        or set(devices) != set(range(count))
+        or not all(v.isdigit() for v in values)
+    ):
+        return None
+    return values[np.argsort(devices)].astype(np.int64)
 
 
 def build_channel_table(

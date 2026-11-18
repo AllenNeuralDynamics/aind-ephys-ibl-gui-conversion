@@ -21,7 +21,10 @@ class ExperimentBlock:
     recording: si.BaseRecording
     lfp_recording: si.BaseRecording | None  # 1.0 probes only
     block_index: int
-    source: Literal["main", "surface"] | None = None
+    source: Literal["main", "surface", "unknown"] | None = None
+    recording_id: str | None = None
+    segment_index: int = 0
+    selected_main: bool = False
 
     @property
     def is_1_0(self) -> bool:
@@ -48,12 +51,20 @@ class ProbeStream:
 
     @property
     def main_block(self) -> ExperimentBlock:
-        """The longest (main session) block."""
+        """The selected main block, with a legacy longest-block fallback."""
+        selected = [b for b in self.blocks if b.selected_main]
+        if selected:
+            return selected[0]
         return max(self.blocks, key=lambda b: b.duration)
 
     @property
+    def has_multiple_blocks(self) -> bool:
+        """Whether assembly needs a channel table spanning multiple blocks."""
+        return len(self.blocks) > 1
+
+    @property
     def has_surface(self) -> bool:
-        """True if surface-finding blocks are present."""
+        """Legacy alias for multiple blocks, regardless of purpose."""
         return len(self.blocks) > 1
 
     @property

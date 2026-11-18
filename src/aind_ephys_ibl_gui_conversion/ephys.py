@@ -7,6 +7,12 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from aind_ephys_ibl_gui_conversion.planned_extraction import (
+        PlannedExtraction,
+    )
 
 import scipy.fft
 
@@ -171,6 +177,66 @@ def _skip_short_blocks(
         stream.blocks = usable_blocks
 
 
+def _load_legacy_streams(
+    session_folder: Path,
+    results_folder: Path,
+    stream_to_use: str | None,
+    main_recording_min_secs: int,
+    probe_surface_finding: Path | None,
+    rms_window_duration: float,
+) -> list[ProbeStream]:
+    """Retain session-wide discovery for callers without saved plans."""
+    neuropix_streams, ecephys_compressed_folder, num_blocks = (
+        get_ecephys_stream_names(session_folder)
+    )
+
+    if stream_to_use is not None:
+        logging.info(
+            f"[FFT] Stream filter active: only processing {stream_to_use}"
+        )
+
+    # Load raw recordings into ProbeStream objects
+    streams = load_probe_streams(
+        neuropix_streams,
+        num_blocks,
+        ecephys_compressed_folder,
+        results_folder,
+        stream_to_use=stream_to_use,
+        main_recording_min_secs=main_recording_min_secs,
+    )
+
+    # Handle separate surface-finding asset
+    if probe_surface_finding is not None:
+        (
+            neuropix_streams_surface,
+            ecephys_compressed_folder_surface,
+            num_blocks_surface,
+        ) = get_ecephys_stream_names(probe_surface_finding)
+
+        # Independent acquisitions need their own block count. Using the
+        # main count requests nonexistent surface zarrs in 754372's session.
+        if num_blocks_surface != num_blocks:
+            logging.info(
+                f"[FFT] Surface-finding recording has "
+                f"{num_blocks_surface} block(s) vs {num_blocks} in the "
+                "main recording; using its own count"
+            )
+
+        surface_streams = load_probe_streams(
+            neuropix_streams_surface,
+            num_blocks_surface,
+            ecephys_compressed_folder_surface,
+            results_folder,
+            stream_to_use=stream_to_use,
+            main_recording_min_secs=main_recording_min_secs,
+            block_source="surface",
+        )
+        streams = merge_probe_streams(streams, surface_streams)
+
+    _skip_short_blocks(streams, rms_window_duration)
+    return streams
+
+
 def extract_continuous(
     sorting_folder: Path,
     results_folder: Path,
@@ -194,6 +260,7 @@ def extract_continuous(
     lfp_bandpass_margin_ms: float = 3000.0,
     coherence_block_source: CoherenceBlockSource = "all",
     extra_metrics: tuple[WindowMetric, ...] | None = None,
+    execution: "PlannedExtraction | None" = None,
 ):
     """Extract QC metrics from raw ephys data using FFT-based computation.
 
@@ -235,6 +302,8 @@ def extract_continuous(
     coherence_block_source : {"all", "main", "surface"}
         Block provenance used to aggregate correlation and coherency. Other
         metrics and channel metadata continue to use all blocks.
+    execution : PlannedExtraction or None
+        Prevalidated saved decisions and mounted inputs; bypasses discovery.
     extra_metrics : tuple[WindowMetric, ...] or None
         Immutable metric configurations beyond the built-in QC metrics.
         ``None`` runs :data:`DEFAULT_EXTRA_METRICS`; a tuple replaces them, so
@@ -261,63 +330,18 @@ def extract_continuous(
     except ImportError:
         pass
 
-    neuropix_streams, ecephys_compressed_folder, num_blocks = (
-        get_ecephys_stream_names(session_folder)
-    )
-
-    if stream_to_use is not None:
-        logging.info(
-            f"[FFT] Stream filter active: only processing {stream_to_use}"
-        )
-
-    # Load raw recordings into ProbeStream objects
-    streams = load_probe_streams(
-        neuropix_streams,
-        num_blocks,
-        ecephys_compressed_folder,
-        results_folder,
-        stream_to_use=stream_to_use,
-        main_recording_min_secs=main_recording_min_secs,
-    )
-
-    # Handle separate surface-finding asset
-    if probe_surface_finding is not None:
-        (
-            neuropix_streams_surface,
-            ecephys_compressed_folder_surface,
-            num_blocks_surface,
-        ) = get_ecephys_stream_names(probe_surface_finding)
-
-        # Use the surface recording's OWN block count. It is an independent,
-        # usually shorter acquisition, so it has no reason to have the same
-        # number of experiments as the main recording. Passing the main
-        # count made load_probe_streams ask for
-        # experiment<N>_<stream>.zarr files that do not exist, and only the
-        # LFP branch guards a missing zarr -- an absent AP/wideband block
-        # raises. 754372's 2025-01-15 session is the live case: main has
-        # experiment1+2, surface has experiment1 only, and exactly the
-        # experiment2 units failed. A surface recording that happens to
-        # match the main block count passed silently, so this was latent
-        # across the cohort.
-        if num_blocks_surface != num_blocks:
-            logging.info(
-                f"[FFT] Surface-finding recording has "
-                f"{num_blocks_surface} block(s) vs {num_blocks} in the "
-                "main recording; using its own count"
-            )
-
-        surface_streams = load_probe_streams(
-            neuropix_streams_surface,
-            num_blocks_surface,
-            ecephys_compressed_folder_surface,
+    if execution is not None:
+        execution.check_request(stream_to_use, rms_window_duration)
+        streams = [execution.stream]
+    else:
+        streams = _load_legacy_streams(
+            session_folder,
             results_folder,
-            stream_to_use=stream_to_use,
-            main_recording_min_secs=main_recording_min_secs,
-            block_source="surface",
+            stream_to_use,
+            main_recording_min_secs,
+            probe_surface_finding,
+            rms_window_duration,
         )
-        streams = merge_probe_streams(streams, surface_streams)
-
-    _skip_short_blocks(streams, rms_window_duration)
 
     if coherence_block_source != "all":
         missing = [
