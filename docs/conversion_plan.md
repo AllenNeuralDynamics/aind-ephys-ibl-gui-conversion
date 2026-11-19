@@ -74,8 +74,10 @@ header and raw-segment counts to agree. The matching header ID is retained as
 `acquisition_header_id`. Sample count alone never waives source checks.
 
 The segment decision records raw and analyzer segment indices, sample count,
-duration, and evidence. It supports the previous longest-segment case when the
-sorting matches that segment, and also a uniquely identified shorter segment.
+duration, and evidence. By default it selects the longest raw segment before inspecting available
+sortings and chooses its uniquely matching family. A shorter family cannot
+replace missing sorting for that segment. An explicit `sorting_family_id` can
+select a uniquely mapped shorter segment within the chosen raw recording.
 Repeated raw lengths, disagreement among analyzer groups, and genuinely
 multisegment analyzers remain unresolved. No session offsets are fabricated.
 
@@ -128,11 +130,12 @@ saved decision. Other incomplete or blocked plans fail before ALF array output.
 A multisegment main recording can execute when `main_segment` identifies its
 single sorted segment. The worker checks that saved decision against its
 inventory and live analyzer samples. Multisegment analyzers remain unsupported.
-Other raw segments remain separate QC blocks with original indices, unknown
-roles, and segment-local timestamps.
+Other segments of the main raw recording are excluded with reason
+`not_selected_main_segment`, preserving the previous largest-segment QC domain.
+Secondary recordings retain separate QC blocks and segment-local clocks.
 
-The selected main segment comes first, followed by its other raw segments and
-secondary blocks sorted by inventory ID and segment index. Blocks shorter than one analysis window are
+The selected main segment comes first, followed by secondary recordings
+sorted by inventory ID and segment index. Blocks shorter than one analysis window are
 excluded with their IDs and reasons recorded in the execution receipt. A main
 block shorter than the window fails; another block never takes its place.
 Both consumers use the resulting canonical channel table. An explicit main
@@ -159,3 +162,10 @@ status, the saved plan, actual block/segment membership, and short-window
 exclusions. Diagnostics are retained before preflight, so a validation failure
 still leaves its input plan and inventory available. A successful extraction
 with missing sorting shanks retains the plan's incomplete coverage status.
+
+Legacy probe identity stored in `annotations.probes_info` is normalized for
+both inventory and live validation. Conflicting explicit and legacy serials
+remain unknown. Standard unprefixed `e<number>` contacts identify physical
+shank zero only when explicit shank IDs are absent; group labels do not supply
+physical identity. The retained 762286 fixture covers the original largest-
+segment regression with two analyzer families and one removed channel.

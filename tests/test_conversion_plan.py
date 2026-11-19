@@ -244,6 +244,11 @@ def test_unique_sorted_segment_preserves_source_and_local_clock(
     count = _recording(inventory, 1)["segments"][0]["sample_count"]
     _make_multisegment_main(inventory, [int(count * other_factor), count])
     plan = _plan(inventory)
+    if other_factor > 1:
+        assert plan["status"] == "blocked"
+        assert plan["analyzers"] == []
+        family = plan["sorting_families"][0]["id"]
+        plan = _plan(inventory, sorting_family_id=family)
     assert _codes(plan) == {"main_shanks_without_sorting"}
     assert plan["main_segment"] == dict(
         raw_segment_index=1,

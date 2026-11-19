@@ -185,6 +185,7 @@ def _contacts(config: Row) -> dict[ContactKey, Row] | None:
             not isinstance(shanks, list) or len(shanks) != len(ids)
         ):
             return None
+        single_shank_ids = all(re.fullmatch(r"e\d+", str(c)) for c in ids)
         for index, (contact, position) in enumerate(zip(ids, positions)):
             if channels is not None and channels[index] < 0:
                 continue
@@ -203,6 +204,8 @@ def _contacts(config: Row) -> dict[ContactKey, Row] | None:
                 if physical is not None and physical != int(recorded):
                     return None
                 physical = int(recorded)
+            if physical is None and not recorded and single_shank_ids:
+                physical = 0
             result[key] = dict(position=position, units=units, shank=physical)
     return result or None
 
@@ -444,7 +447,7 @@ def _shank_coverage(
 
 
 def _paired_lfp(
-    inventory: Row, recording: Row
+    inventory: Row, recording: Row, indices: list[int] | None = None
 ) -> tuple[Row | None, str | None]:
     """Keep NP1 AP/LFP pairing within the same asset and experiment."""
     stream = recording.get("stream") or ""
@@ -473,7 +476,10 @@ def _paired_lfp(
             rel_tol=0,
             abs_tol=1 / min(ap_rate, lfp_rate),
         )
-        for a, b in zip(recording["segments"], paired["segments"])
+        for index, (a, b) in enumerate(
+            zip(recording["segments"], paired["segments"])
+        )
+        if indices is None or index in indices
     ):
         return paired, "lfp_duration_mismatch"
     return paired, None
@@ -515,8 +521,14 @@ def _continuous_inputs(
             for key in main_contacts.keys() & contacts.keys()
         ):
             reason = "contact_geometry_conflict"
+        indices = (
+            [plan["main_segment"]["raw_segment_index"]]
+            if recording["id"] == main["id"]
+            and plan.get("main_segment") is not None
+            else [s["index"] for s in recording["segments"]]
+        )
         paired, pair_problem = (
-            _paired_lfp(inventory, recording)
+            _paired_lfp(inventory, recording, indices)
             if reason is None
             else (None, None)
         )
@@ -533,6 +545,7 @@ def _continuous_inputs(
                 **_reference(recording),
                 stream=recording.get("stream"),
                 segments=recording["segments"],
+                segment_indices=indices,
                 paired_lfp=_reference(paired) if paired is not None else None,
                 channel_configuration=recording["channel_configuration"],
                 selected=reason is None,
@@ -591,6 +604,38 @@ def _status(plan: Row) -> Row:
     return copy.deepcopy(plan)
 
 
+def _choose_families(
+    plan: Row,
+    inventory: Row,
+    main: Row,
+    families: list[Row],
+    override: str | None,
+) -> list[Row]:
+    """Choose the longest raw segment before inspecting its sortings."""
+    if override is not None:
+        return [f for f in families if f["id"] == override]
+    if len(main["segments"]) == 1:
+        return families
+    maximum = max(s["sample_count"] for s in main["segments"])
+    if sum(s["sample_count"] == maximum for s in main["segments"]) != 1:
+        _issue(plan, "main_segment_duration_tie", "error")
+        _issue(plan, "segment_mapping_unverified", "incomplete")
+        return []
+    analyzers = {a["id"]: a for a in inventory["sortings"]}
+    chosen = [
+        f
+        for f in families
+        if all(
+            analyzers[key].get("segment_count") == 1
+            and analyzers[key].get("sample_counts") == [maximum]
+            for key in f["analyzer_ids"]
+        )
+    ]
+    if not chosen:
+        _issue(plan, "segment_mapping_unverified", "incomplete")
+    return chosen
+
+
 def build_conversion_plan(
     inventory: Row,
     collection: str,
@@ -622,6 +667,7 @@ def build_conversion_plan(
             main="longest_recorded_duration",
             duration="sum_segment_samples_over_rate",
             time_basis="segment_local",
+            main_segment="longest_recorded_segment",
             non_main_role="unknown",
             sorting="one_family_from_selected_block",
             qc="compatible_primary_blocks",
@@ -671,11 +717,7 @@ def build_conversion_plan(
     if not scoped["metadata_complete"]:
         _issue(plan, "inventory_metadata_incomplete", "incomplete")
     families = _family_candidates(plan, scoped, main, asset["key"])
-    chosen = [
-        f
-        for f in families
-        if sorting_family_id is None or f["id"] == sorting_family_id
-    ]
+    chosen = _choose_families(plan, scoped, main, families, sorting_family_id)
     if len(chosen) != 1:
         _issue(
             plan,

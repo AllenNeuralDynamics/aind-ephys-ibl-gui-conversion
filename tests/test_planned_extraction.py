@@ -382,10 +382,13 @@ def test_single_sorted_segment_controls_qc_and_spike_clock(planned):
     assert blocks[0].selected_main
     assert blocks[0].segment_index == 1
     assert blocks[0].duration == 5
-    assert blocks[1].recording_id == "main"
-    assert blocks[1].segment_index == 0
-    assert blocks[1].source == "unknown"
-    assert blocks[1].duration == 6
+    assert blocks[1].recording_id == "secondary"
+    assert any(
+        s["recording_id"] == "main"
+        and s["segment_index"] == 0
+        and s["reason"] == "not_selected_main_segment"
+        for s in execution.skipped_blocks
+    )
     extract_continuous(
         Path("unused"),
         Path("unused"),
