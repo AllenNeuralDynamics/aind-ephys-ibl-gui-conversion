@@ -14,6 +14,8 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
+from aind_ephys_ibl_gui_conversion.probe_metadata import probe_metadata
+
 INVENTORY_VERSION = "1.0.0"
 INVENTORY_FILENAME = "ephys_inventory.json"
 MAX_METADATA_BYTES = 8 * 1024 * 1024
@@ -121,26 +123,15 @@ def _read(
 
 
 def _geometry(
-    inventory: dict[str, Any], asset: str, path: str, probe_group: Any
+    inventory: dict[str, Any],
+    asset: str,
+    path: str,
+    probe_group: Any,
+    annotations: Any = None,
 ) -> str:
     """Preserve producer channel ordering and physical identity verbatim."""
     config_id = _id(asset, path, "channels")
-    probes = []
-    if not isinstance(probe_group, dict):
-        probe_group = {}
-    for probe in probe_group.get("probes", []):
-        annotations = probe.get("annotations") or {}
-        probes.append(
-            dict(
-                serial=annotations.get("serial_number"),
-                model=annotations.get("part_number"),
-                contact_ids=probe.get("contact_ids"),
-                contact_positions=probe.get("contact_positions"),
-                device_channel_indices=probe.get("device_channel_indices"),
-                shank_ids=probe.get("shank_ids"),
-                units=probe.get("si_units"),
-            )
-        )
+    probes = probe_metadata(probe_group, annotations)
     inventory["channel_configurations"].append(
         dict(id=config_id, asset=asset, metadata_path=path, probes=probes)
     )
@@ -259,7 +250,11 @@ def _compressed_record(
             segments=segments,
             declared_segment_count=attrs.get("num_segments"),
             channel_configuration=_geometry(
-                inventory, asset, f"{path}/.zattrs", attrs.get("probe")
+                inventory,
+                asset,
+                f"{path}/.zattrs",
+                attrs.get("probe"),
+                attrs.get("annotations"),
             ),
             acquisition_role=None,
         )
@@ -391,6 +386,7 @@ def _sorting_record(
                 asset,
                 f"{path}/recording_info/.zattrs",
                 info.get("probegroup"),
+                source.get("annotations"),
             ),
         )
     )

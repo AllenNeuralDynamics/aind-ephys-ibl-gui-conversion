@@ -19,6 +19,7 @@ from aind_ephys_ibl_gui_conversion.conversion_plan import (
     selected_segment,
 )
 from aind_ephys_ibl_gui_conversion.inventory import write_inventory
+from aind_ephys_ibl_gui_conversion.probe_metadata import probe_metadata
 from aind_ephys_ibl_gui_conversion.recording_utils import _stream_matches
 from aind_ephys_ibl_gui_conversion.spikes import _load_analyzer
 from aind_ephys_ibl_gui_conversion.types import (
@@ -45,20 +46,15 @@ def resolve_reference(reference: Row, roots: dict[str, Path]) -> Path:
 
 def _live_geometry(obj: Any) -> Row:
     """Use the same portable probe fields as discovery, including serials."""
-    probes = obj.get_probegroup().to_dict(array_as_list=True)["probes"]
-    return dict(
-        probes=[
-            dict(
-                serial=p.get("annotations", {}).get("serial_number"),
-                units=p.get("si_units"),
-                contact_ids=p.get("contact_ids"),
-                contact_positions=p.get("contact_positions"),
-                device_channel_indices=p.get("device_channel_indices"),
-                shank_ids=p.get("shank_ids"),
-            )
-            for p in probes
-        ]
-    )
+    group = obj.get_probegroup().to_dict(array_as_list=True)
+    if hasattr(obj, "sorting"):
+        source = (obj.sorting.get_annotation("__sorting_info__") or {}).get(
+            "recording"
+        ) or {}
+        annotations = source.get("annotations") or {}
+    else:
+        annotations = dict(probes_info=obj.get_annotation("probes_info"))
+    return dict(probes=probe_metadata(group, annotations))
 
 
 def _geometry_in_channel_order(
@@ -226,6 +222,28 @@ def _selected_main_index(
     return 0
 
 
+def _qc_segments(
+    reference: Row,
+    observed: Row,
+    main: Row,
+    main_index: int,
+    skipped: list[Row],
+) -> list[Row]:
+    """Keep the selected main clock and retain independent secondary clocks."""
+    if reference["id"] != main["id"]:
+        return list(observed["segments"])
+    skipped.extend(
+        dict(
+            recording_id=reference["id"],
+            segment_index=s["index"],
+            reason="not_selected_main_segment",
+        )
+        for s in observed["segments"]
+        if s["index"] != main_index
+    )
+    return [s for s in observed["segments"] if s["index"] == main_index]
+
+
 def prepare_extraction(
     plan: Row,
     inventory: Row,
@@ -269,13 +287,7 @@ def prepare_extraction(
                 _live_geometry(lfp), lfp.get_num_channels()
             ):
                 raise ValueError("AP and LFP channel order differs")
-        segments = sorted(
-            observed["segments"],
-            key=lambda s: (
-                reference["id"] == main["id"] and s["index"] != main_index,
-                s["index"],
-            ),
-        )
+        segments = _qc_segments(reference, observed, main, main_index, skipped)
         for source_segment in segments:
             index = source_segment["index"]
             ap_segment = recording.select_segments([index])
