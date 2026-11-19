@@ -64,7 +64,7 @@ def planned(tmp_path):
         ("short", short, "unknown"),
     ]:
         configs.append(dict(id=name, **_live_geometry(rec)))
-        path = f"ecephys/{name}.zarr"
+        path = f"ecephys/{name}#probe.zarr"
         (raw / "ecephys").mkdir(exist_ok=True)
         rec.save(format="zarr", folder=raw / path, verbose=False)
         row = dict(
@@ -105,7 +105,7 @@ def planned(tmp_path):
         analyzer.compute("spike_amplitudes")
         analyzer.compute("spike_locations", method="center_of_mass")
         analyzer.compute("quality_metrics", metric_names=["num_spikes"])
-        path = f"postprocessed/group{i}.zarr"
+        path = f"postprocessed/group{i}#probe.zarr"
         (sorted_root / "postprocessed").mkdir(exist_ok=True)
         analyzer.save_as(format="zarr", folder=sorted_root / path)
         config_id = f"analyzer{i}"
