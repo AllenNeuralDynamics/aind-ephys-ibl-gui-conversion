@@ -163,7 +163,7 @@ Open Ephys stream IDs follow
 
 ## Dependencies
 
-- **spikeinterface[metrics]** >= 0.104.0 -- Recording/Sorting abstractions,
+- **spikeinterface[metrics]** >= 0.104.0, < 0.106.0 -- Recording/Sorting abstractions,
   SortingAnalyzer, and quality metrics. The converter uses the `metrics` extra;
   the `full` extra also installs unused CUDA, sorting, and visualization
   dependencies.
@@ -183,3 +183,8 @@ Open Ephys stream IDs follow
 - The `utils.py` module is vendored from IBL's `ibl-neuropixel` (Feb 2024);
   if upgrading, check upstream for bug fixes in `WindowGenerator`, `bp`,
   `lp`, `hp`, `fscale`, `fexpand`, `rms`, and `fcn_cosine`.
+
+Production extraction currently uses Zarr 2 (`>=2.18,<3`). Zarr 3 path
+handling interprets the `#` in existing Open Ephys recording/analyzer folder
+names as a fragment. Keep the tested SpikeInterface/Zarr bounds until that
+loader path is supported and validated against mounted production data.
