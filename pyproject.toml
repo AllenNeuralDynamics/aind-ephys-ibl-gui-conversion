@@ -21,7 +21,7 @@ version = "0.7.2"
 
 dependencies = [
     "aind-mri-utils",
-    "antspyx>=0.4.2",
+    "antspyx>=0.6.3",
     "one-api>=2.6.0",
     "tqdm>=4.66.1",
     "wavpack-numcodecs",
