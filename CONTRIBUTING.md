@@ -170,7 +170,7 @@ Open Ephys stream IDs follow
 - **pandas, scipy** -- Direct dependencies for spike metadata tables and
   continuous-signal calculations
 - **one-api** >= 2.6.0 -- IBL data API
-- **antspyx** >= 0.4.2 -- Used by `histology.py` only
+- **antspyx** >= 0.6.3 -- Used by `histology.py` only; matches the validated wheel stack
 - **aind-mri-utils** -- Probe trajectory fitting in `histology.py`
 - **wavpack-numcodecs** -- Decompresses WavPack-compressed zarr recordings
 - **tqdm, numpy** -- Standard utilities
