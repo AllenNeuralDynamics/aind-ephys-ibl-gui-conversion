@@ -45,18 +45,24 @@ def _recording(seconds, contacts, positions):
 
 
 @pytest.fixture
-def planned(tmp_path):
+def planned(tmp_path, request):
     raw, sorted_root = tmp_path / "raw", tmp_path / "sort"
     raw.mkdir()
     sorted_root.mkdir()
-    # Sparse physical shanks; secondary outlasts the explicit main.
+    # Sparse physical shanks by default; split collections have one shank.
+    shanks = getattr(request, "param", (2, 0))
     main = _recording(
         5,
-        ["s2e1", "s2e0", "s0e1", "s0e0"],
-        [[500, 20], [500, 0], [0, 20], [0, 0]],
+        [f"s{s}e{e}" for s in shanks for e in (1, 0)],
+        [[s * 250, e * 20] for s in shanks for e in (1, 0)],
     )
-    secondary = _recording(6, ["s2e2", "s2e1"], [[500, 40], [500, 20]])
-    short = _recording(1, ["s2e3"], [[500, 60]])
+    first = shanks[0]
+    secondary = _recording(
+        6,
+        [f"s{first}e2", f"s{first}e1"],
+        [[first * 250, 40], [first * 250, 20]],
+    )
+    short = _recording(1, [f"s{first}e3"], [[first * 250, 60]])
     records, configs, continuous = [], [], []
     for name, rec, role in [
         ("main", main, "main"),
@@ -88,7 +94,8 @@ def planned(tmp_path):
             dict(**row, selected=True, role=role, paired_lfp=None)
         )
     sortings, analyzer_refs = [], []
-    for i, channels in enumerate(([0, 1], [2, 3])):
+    for i in range(len(shanks)):
+        channels = [2 * i, 2 * i + 1]
         recording = main.select_channels(channels)
         times = np.array([30000, 90000]) if i == 0 else np.array([15000])
         sorting = si.NumpySorting.from_unit_dict({7: times}, 30000)
@@ -150,15 +157,31 @@ def _prepare(planned):
     return prepare_extraction(*planned)
 
 
-def test_planned_spikes_use_global_units_rows_and_physical_shanks(planned):
+@pytest.mark.parametrize("planned", [(0,), (1,), (2,), (3,)], indirect=True)
+def test_quadbase_spikes_remain_visible_to_local_shank_zero(planned):
+    execution = _prepare(planned)
+    extract_spikes(Path("unused"), Path("unused"), execution=execution)
+    output = execution.stream.output_folder
+    spike_shanks = np.load(output / "spike_shank_indices.npy")
+    unit_shanks = np.load(output / "unit_shank_indices.npy")
+    # The GUI normalizes this single physical shank to local index zero and
+    # selects spikes with this predicate. No producer IDs may leak into it.
+    physical = execution.channel_table.shank_ind
+    assert len(np.unique(physical)) == 1
+    assert spike_shanks.size > 0
+    assert np.count_nonzero(spike_shanks == 0) == spike_shanks.size
+    np.testing.assert_array_equal(unit_shanks, np.zeros(len(unit_shanks)))
+
+
+def test_planned_spikes_use_global_units_rows_and_local_shanks(planned):
     execution = _prepare(planned)
     extract_spikes(Path("unused"), Path("unused"), execution=execution)
     output = execution.stream.output_folder
     load = lambda name: np.load(output / name)  # noqa: E731
     np.testing.assert_array_equal(load("spikes.times.npy"), [0.5, 1, 3])
     np.testing.assert_array_equal(load("spikes.clusters.npy"), [1, 0, 0])
-    np.testing.assert_array_equal(load("spike_shank_indices.npy"), [0, 2, 2])
-    np.testing.assert_array_equal(load("unit_shank_indices.npy"), [2, 0])
+    np.testing.assert_array_equal(load("spike_shank_indices.npy"), [0, 1, 1])
+    np.testing.assert_array_equal(load("unit_shank_indices.npy"), [1, 0])
     assert load("spikes.amps.npy").shape == (3,)
     assert load("clusters.waveforms.npy").shape == (2, 45, 1)
     assert np.isnan(load("clusters.waveforms.npy")[0, :15]).all()
@@ -262,8 +285,47 @@ def test_missing_shank_converts_available_main_sorting_only(planned):
     execution = _prepare(planned)
     extract_spikes(Path("unused"), Path("unused"), execution=execution)
     output = execution.stream.output_folder
-    assert set(np.load(output / "unit_shank_indices.npy")) == {2}
+    assert set(np.load(output / "unit_shank_indices.npy")) == {1}
     assert set(execution.channel_table.shank_ind) == {0, 2}
+
+
+def test_collection_audit_rejects_physical_ids_in_local_spike_contract(
+    planned,
+):
+    from aind_ephys_ibl_gui_conversion.output_validation import (
+        audit_collection,
+    )
+
+    execution = _prepare(planned)
+    extract_continuous(
+        Path("unused"),
+        Path("unused"),
+        execution=execution,
+        extra_metrics=(),
+        num_parallel_jobs=1,
+    )
+    extract_spikes(Path("unused"), Path("unused"), execution=execution)
+    output = execution.stream.output_folder
+    execution.write_receipt(output, "complete")
+    plan = {
+        **execution.plan,
+        "main_segment": {"duration_s": 5.0},
+        "shank_coverage": {
+            "recorded": [0, 2],
+            "sorted": [0, 2],
+            "missing": [],
+        },
+    }
+    result = audit_collection(output, plan)
+    assert result["unit_shanks"] == [0, 1]
+    assert result["physical_unit_shanks"] == [0, 2]
+    peaks = np.load(output / "clusters.channels.npy")
+    np.save(
+        output / "unit_shank_indices.npy",
+        execution.channel_table.shank_ind[peaks],
+    )
+    with pytest.raises(AssertionError):
+        audit_collection(output, plan)
 
 
 def test_unknown_secondary_is_not_an_implicit_surface(planned):
