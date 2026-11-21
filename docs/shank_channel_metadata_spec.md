@@ -167,9 +167,13 @@ records per-track `histology_shank` and `ephys_shank` in `xyz_picks`.
 The split stream may retain contact IDs such as `s3e17`; its one-shank table
 normalizes to local shank 0. Histology filenames can have one-based physical
 shank suffixes; never infer ephys membership from them. Spike/unit shank
-vectors use physical peak-channel shanks during planned extraction. Legacy
-extraction derives them from analyzer enumeration. Neither replaces the
-per-channel shank table.
+vectors use collection-local indices, matching the GUI's shank selection.
+Planned extraction derives that index by sorting the unique physical shank
+IDs in the complete channel table, including shanks without sorted units.
+For channel shanks `[0, 2]`, local indices are `[0, 1]`; for a split stream
+containing only physical shank 3, every spike/unit shank index is 0. Physical
+identity remains in `channels.shankInd.npy`, the contact IDs, and the plan.
+Legacy extraction derives spike/unit shank indices from analyzer enumeration.
 
 ## Compatibility And Review
 
