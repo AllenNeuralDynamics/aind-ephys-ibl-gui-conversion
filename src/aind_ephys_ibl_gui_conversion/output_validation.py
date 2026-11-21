@@ -46,11 +46,13 @@ def audit_collection(folder: Path, plan: dict[str, Any]) -> dict[str, Any]:
         clusters.min() >= 0 and clusters.max() < len(channels)
     )
     assert np.all((channels >= 0) & (channels < len(coordinates)))
-    np.testing.assert_array_equal(unit_shanks, channel_shanks[channels])
+    _, local_channel_shanks = np.unique(channel_shanks, return_inverse=True)
+    np.testing.assert_array_equal(unit_shanks, local_channel_shanks[channels])
     np.testing.assert_array_equal(spike_shanks, unit_shanks[clusters])
     coverage = plan["shank_coverage"]
-    assert set(unit_shanks) <= set(coverage["sorted"])
-    assert not set(unit_shanks) & set(coverage["missing"])
+    physical_unit_shanks = channel_shanks[channels]
+    assert set(physical_unit_shanks) <= set(coverage["sorted"])
+    assert not set(physical_unit_shanks) & set(coverage["missing"])
     expected = sum(a["unit_count"] for a in plan["analyzers"])
     assert len(channels) == expected
     rows = json.loads((folder / "band_corr/row_channels.json").read_text())
@@ -71,6 +73,7 @@ def audit_collection(folder: Path, plan: dict[str, Any]) -> dict[str, Any]:
         unit_count=len(channels),
         channel_rows=len(coordinates),
         unit_shanks=np.unique(unit_shanks).tolist(),
+        physical_unit_shanks=np.unique(physical_unit_shanks).tolist(),
         channel_shanks=np.unique(channel_shanks).tolist(),
         shank_coverage=coverage,
         main_segment=plan["main_segment"],

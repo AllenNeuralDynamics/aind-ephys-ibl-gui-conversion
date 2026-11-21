@@ -92,11 +92,15 @@ def extract_planned_spikes(execution: PlannedExtraction) -> None:
     """
     chunks, metrics = [], []
     offset = 0
+    # Spike/unit shank vectors are collection-local GUI indices. The channel
+    # table retains physical IDs; normalize its full domain, including shanks
+    # without sorted units, so missing sorting cannot shift the display index.
+    _, local_channel_shanks = np.unique(
+        execution.channel_table.shank_ind, return_inverse=True
+    )
     for reference, analyzer, path in execution.analyzers:
         rows = analyzer_rows(analyzer, execution.channel_table)
-        chunk = _analyzer_arrays(
-            analyzer, rows, execution.channel_table.shank_ind
-        )
+        chunk = _analyzer_arrays(analyzer, rows, local_channel_shanks)
         chunk["clusters"] = chunk["clusters"] + offset
         frame = _quality_metrics_with_labels(
             analyzer, path.parent.parent / "curated" / path.name
