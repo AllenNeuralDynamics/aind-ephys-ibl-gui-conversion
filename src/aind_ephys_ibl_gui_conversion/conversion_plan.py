@@ -238,10 +238,28 @@ def selected_segment(main: Row, analyzers: list[Row]) -> Row | None:
         or any(a.get("segment_count") != 1 for a in analyzers)
     ):
         return None
+    references = [
+        a["preprocessing_source"]
+        for a in analyzers
+        if a.get("preprocessing_source") is not None
+    ]
+    explicit_indices = set()
+    for reference in references:
+        if reference.get("status") != "observed":
+            return None
+        indices = reference.get("segment_indices")
+        if indices is None:
+            indices = list(range(len(segments)))
+        if len(indices) != 1 or type(indices[0]) is not int:
+            return None
+        explicit_indices.add(indices[0])
+    if references and len(explicit_indices) != 1:
+        return None
     matches = [
         s
         for s in segments
         if s["sample_count"] > 0
+        and (not references or s["index"] in explicit_indices)
         and all(
             a.get("sample_counts") == [s["sample_count"]] for a in analyzers
         )
@@ -254,7 +272,9 @@ def selected_segment(main: Row, analyzers: list[Row]) -> Row | None:
         analyzer_segment_index=0,
         sample_count=segment["sample_count"],
         duration_s=segment["sample_count"] / main["sampling_frequency"],
-        evidence="single_segment"
+        evidence="retained_preprocessing_source"
+        if references
+        else "single_segment"
         if len(segments) == 1
         else "unique_sample_count_with_source_checks",
     )
@@ -283,6 +303,8 @@ def _validate_family(
     for analyzer in selected:
         link = links[analyzer["id"]]
         checks = dict(link.get("checks", {}).get(main["id"], {}))
+        if analyzer.get("preprocessing_source") is not None:
+            checks.setdefault("preprocessing_source_path", None)
         # Discovery compares whole segment vectors. A single-segment analyzer
         # can instead match one unique segment of this identified raw source.
         if (
@@ -403,7 +425,11 @@ def _validate_acquisition_mapping(
                 analyzer_segment_index=plan["main_segment"][
                     "analyzer_segment_index"
                 ],
-                evidence="unique_header_for_single_raw_segment"
+                evidence="retained_preprocessing_source_and_unique_header"
+                if single
+                and plan["main_segment"]["evidence"]
+                == "retained_preprocessing_source"
+                else "unique_header_for_single_raw_segment"
                 if single
                 else "matching_recording_name",
             )
@@ -763,6 +789,7 @@ def build_conversion_plan(
                 unit_count=a.get("unit_count"),
                 channel_configuration=a["channel_configuration"],
                 sample_counts=a.get("sample_counts"),
+                preprocessing_source=a.get("preprocessing_source"),
             )
             for a in analyzers
         ]

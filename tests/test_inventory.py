@@ -39,7 +39,9 @@ class MemoryStore:
         self.reads.append(path)
         if path not in self.files:
             raise FileNotFoundError(path)
-        assert path.endswith((".zattrs", ".zarray", ".zmetadata", ".oebin"))
+        assert path.endswith(
+            (".zattrs", ".zarray", ".zmetadata", ".oebin", ".json")
+        )
         return copy.deepcopy(self.files[path])
 
 
@@ -270,6 +272,51 @@ def test_malformed_analyzer_does_not_hide_later_siblings(retained):
     assert any(
         f["code"] == "record_scan_incomplete" for f in inventory["findings"]
     )
+
+
+@pytest.mark.parametrize(
+    "asset_name,expected", [("raw", True), ("wrong-asset", False)]
+)
+def test_preprocessing_source_is_read_and_checked_against_asset(
+    retained, asset_name, expected
+):
+    files = copy.deepcopy(retained)
+    initial = build_inventory(sources(files))
+    analyzer = initial["sortings"][0]
+    raw = next(
+        r
+        for r in initial["recordings"]
+        if r["experiment"] == analyzer["experiment"]
+        and r["stream"] == analyzer["stream"]
+    )
+    basename = analyzer["path"].split("/", 1)[1].removesuffix(".zarr")
+    filename = f"preprocessed/{basename}.json"
+    files["sorted"][filename] = {
+        "class": "spikeinterface.core.segmentutils.SelectSegmentRecording",
+        "kwargs": {
+            "segment_indices": [0],
+            "recording": {
+                "class": (
+                    "spikeinterface.core.zarrextractors.ZarrRecordingExtractor"
+                ),
+                "kwargs": {
+                    "folder_path": f"../data/{asset_name}/{raw['path']}"
+                },
+            },
+        },
+    }
+    inventory = build_inventory(sources(files))
+    observed = next(
+        a for a in inventory["sortings"] if a["id"] == analyzer["id"]
+    )
+    assert observed["preprocessing_source"]["metadata_path"] == filename
+    assert observed["preprocessing_source"]["segment_indices"] == [0]
+    link = next(
+        link
+        for link in inventory["relationships"]
+        if link["source"] == analyzer["id"]
+    )
+    assert link["checks"][raw["id"]]["preprocessing_source_path"] is expected
 
 
 def test_unknown_shank_metadata_is_not_filled_from_group(retained):

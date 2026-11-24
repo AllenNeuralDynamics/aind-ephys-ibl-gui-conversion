@@ -15,6 +15,10 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
 from aind_ephys_ibl_gui_conversion.probe_metadata import probe_metadata
+from aind_ephys_ibl_gui_conversion.source_provenance import (
+    parse_preprocessing_source,
+    source_matches,
+)
 
 INVENTORY_VERSION = "1.0.0"
 INVENTORY_FILENAME = "ephys_inventory.json"
@@ -352,6 +356,18 @@ def _sorting_record(
         (sorting.get("annotations") or {}).get("__sorting_info__") or {}
     ).get("recording") or {}
     units = (meta.get("sorting/unit_ids/.zarray") or {}).get("shape")
+    preprocessing_path = "preprocessed/" + name.removesuffix(".zarr") + ".json"
+    before = len(inventory["findings"])
+    preprocessing = _read(
+        store, preprocessing_path, inventory, asset, optional=True
+    )
+    provenance = None
+    if preprocessing is not None:
+        provenance = parse_preprocessing_source(preprocessing)
+    elif len(inventory["findings"]) != before:
+        provenance = {"status": "unreadable"}
+    if provenance is not None:
+        provenance["metadata_path"] = preprocessing_path
     inventory["sortings"].append(
         dict(
             id=_id(asset, path, "sorting"),
@@ -373,6 +389,7 @@ def _sorting_record(
                 class_name=source.get("class"),
                 folder_path=(source.get("kwargs") or {}).get("folder_path"),
             ),
+            preprocessing_source=provenance,
             sampling_frequency=recording.get(
                 "sampling_frequency", sorting.get("sampling_frequency")
             ),
@@ -446,6 +463,28 @@ def _compare(
     return checks
 
 
+def _source_comparisons(
+    inventory: dict[str, Any],
+    sorting: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    configs: dict[str, Any],
+    assets: dict[str, Any],
+) -> dict[str, Any]:
+    """Include retained source paths without weakening physical checks."""
+    comparisons = {
+        r["id"]: _compare(inventory, sorting, r, configs) for r in candidates
+    }
+    provenance = sorting.get("preprocessing_source")
+    if provenance is not None:
+        for candidate in candidates:
+            comparisons[candidate["id"]]["preprocessing_source_path"] = (
+                source_matches(
+                    provenance, candidate, assets[candidate["asset"]]
+                )
+            )
+    return comparisons
+
+
 def _relationships(inventory: dict[str, Any]) -> None:
     """Retain all candidate joins, including conflicts and ambiguities."""
     configs = {c["id"]: c for c in inventory["channel_configurations"]}
@@ -509,10 +548,9 @@ def _relationships(inventory: dict[str, Any]) -> None:
             and r["experiment"] == sorting["experiment"]
             and r["stream"] == sorting["stream"]
         ]
-        comparisons = {
-            r["id"]: _compare(inventory, sorting, r, configs)
-            for r in candidates
-        }
+        comparisons = _source_comparisons(
+            inventory, sorting, candidates, configs, assets
+        )
         status = (
             "candidate"
             if len(candidates) == 1
