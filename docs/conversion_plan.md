@@ -47,13 +47,13 @@ Overrides cannot waive conflicting source metadata.
 ## Sorting families and physical coverage
 
 One family consists of analyzers sharing the sorted asset, experiment, full
-stream, and acquisition recording identifier. Group labels stay local to that
+stream, and sorting output's recording label. Group labels stay local to that
 family. Unknown identities are not pooled. If several families can supply the
 chosen block, the planner lists them and waits for an explicit choice.
 
 All groups in the chosen family are considered together. Mixing grouped and
 ungrouped representations, duplicate group labels, overlapping physical
-contacts, source disagreements, and acquisition recording conflicts are
+contacts and source disagreements are
 reported. Contact comparison uses probe serial, contact identity, coordinates,
 and units. Physical shanks come from contact prefixes or recorded probe shank
 IDs, never from enumeration of group files.
@@ -68,10 +68,18 @@ Multiple raw segments retain their original indices and local time basis.
 The planner records `main_segment` when every selected analyzer has one segment
 and its sample count identifies the same unique raw segment. This check operates
 within the source already identified by asset, experiment, full stream, rate,
-and physical contacts. The acquisition recording identifier must match one
-header with compatible sampling and channels; multiple headers also require the
-header and raw-segment counts to agree. The matching header ID is retained as
-`acquisition_header_id`. Sample count alone never waives source checks.
+and physical contacts. Acquisition folder names and sorting recording labels
+are separate identifiers: the sorting dispatcher numbers the segments it loads
+from one, even when the original acquisition folder is `recording2`.
+
+When the selected raw source has one segment and one acquisition header for
+that experiment and full stream, their correspondence is unambiguous. The
+header must still have compatible sampling and channels, and all sorting-source
+checks must pass. The plan records both names, the raw and analyzer segment
+indices, and the evidence in `acquisition_recording_mapping`, alongside
+`acquisition_header_id`. Multiple candidate headers retain the existing name
+and segment-count checks; a name mismatch leaves that mapping unverified.
+Sample count alone never waives source checks.
 
 The segment decision records raw and analyzer segment indices, sample count,
 duration, and evidence. By default it selects the longest raw segment before inspecting available

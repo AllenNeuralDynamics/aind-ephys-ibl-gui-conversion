@@ -350,11 +350,23 @@ def _validate_acquisition_mapping(
     headers = [
         h for h in inventory["recorded_streams"] if h["id"] in header_ids
     ]
-    matching = [
-        h for h in headers if h["recording"] == family.get("recording")
-    ]
+    # The dispatcher labels split Zarr segments recording1, recording2, ...
+    # independently of the original Open Ephys directory names. One acquired
+    # recording and one raw segment have an unambiguous correspondence even
+    # when, for example, acquisition recording2 became sorting recording1.
+    single = (
+        len(headers) == 1
+        and len(main["segments"]) == 1
+        and plan.get("main_segment") is not None
+    )
+    matching = (
+        headers
+        if single
+        else [h for h in headers if h["recording"] == family.get("recording")]
+    )
     if (
         family.get("recording") in (None, "recording")
+        or plan.get("main_segment") is None
         or not headers
         or len(matching) > 1
         or (
@@ -367,7 +379,7 @@ def _validate_acquisition_mapping(
     ):
         _issue(plan, "acquisition_recording_mapping_unverified", "incomplete")
     elif not matching:
-        _issue(plan, "acquisition_recording_identity_conflict", "error")
+        _issue(plan, "acquisition_recording_mapping_unverified", "incomplete")
     else:
         header = matching[0]
         if any(
@@ -383,6 +395,18 @@ def _validate_acquisition_mapping(
             _issue(plan, "acquisition_header_metadata_conflict", "error")
         else:
             plan["acquisition_header_id"] = header["id"]
+            plan["acquisition_recording_mapping"] = dict(
+                header_id=header["id"],
+                acquisition_recording=header["recording"],
+                sorting_recording=family.get("recording"),
+                raw_segment_index=plan["main_segment"]["raw_segment_index"],
+                analyzer_segment_index=plan["main_segment"][
+                    "analyzer_segment_index"
+                ],
+                evidence="unique_header_for_single_raw_segment"
+                if single
+                else "matching_recording_name",
+            )
 
 
 def _shank_coverage(
@@ -681,6 +705,7 @@ def build_conversion_plan(
         main_recording=None,
         main_segment=None,
         acquisition_header_id=None,
+        acquisition_recording_mapping=None,
         sorting_families=[],
         sorting_family=None,
         analyzers=[],
