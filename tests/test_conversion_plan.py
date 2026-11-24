@@ -305,6 +305,58 @@ def test_segment_length_never_waives_other_source_checks(
     ) in _codes(plan)
 
 
+def test_single_acquisition_header_can_have_a_different_recording_name(
+    inventory,
+):
+    main = _recording(inventory, 1)
+    membership = next(
+        link
+        for link in inventory["relationships"]
+        if link["kind"] == "header_membership" and link["source"] == main["id"]
+    )
+    header = next(
+        h
+        for h in inventory["recorded_streams"]
+        if h["id"] == membership["candidates"][0]
+    )
+    header["recording"] = "recording2"
+    plan = _plan(inventory)
+    assert _codes(plan) == {"main_shanks_without_sorting"}
+    assert plan["acquisition_header_id"] == header["id"]
+    assert plan["acquisition_recording_mapping"] == dict(
+        header_id=header["id"],
+        acquisition_recording="recording2",
+        sorting_recording="recording1",
+        raw_segment_index=0,
+        analyzer_segment_index=0,
+        evidence="unique_header_for_single_raw_segment",
+    )
+
+
+def test_mismatched_names_do_not_resolve_multiple_acquisition_headers(
+    inventory,
+):
+    count = _recording(inventory, 1)["segments"][0]["sample_count"]
+    main = _make_multisegment_main(inventory, [30000, count])
+    membership = next(
+        link
+        for link in inventory["relationships"]
+        if link["kind"] == "header_membership" and link["source"] == main["id"]
+    )
+    header = next(
+        h
+        for h in inventory["recorded_streams"]
+        if h["id"] == membership["candidates"][0]
+    )
+    header["recording"] = "recording2"
+    other = dict(header, id="second-header", recording="recording3")
+    inventory["recorded_streams"].append(other)
+    membership["candidates"].append(other["id"])
+    plan = _plan(inventory)
+    assert "acquisition_recording_mapping_unverified" in _codes(plan)
+    assert plan["acquisition_header_id"] is None
+
+
 def test_acquisition_header_is_matched_by_identity_for_multiple_segments(
     inventory,
 ):
