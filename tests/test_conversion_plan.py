@@ -333,6 +333,53 @@ def test_single_acquisition_header_can_have_a_different_recording_name(
     )
 
 
+def test_retained_source_selection_takes_precedence_over_equal_lengths(
+    inventory,
+):
+    count = _recording(inventory, 1)["segments"][0]["sample_count"]
+    main = _make_multisegment_main(inventory, [count, count])
+    analyzers = [
+        a
+        for a in inventory["sortings"]
+        if a["stream"] == STREAM and a["experiment"] == "experiment1"
+    ]
+    for analyzer in analyzers:
+        analyzer["preprocessing_source"] = {
+            "status": "observed",
+            "folder_path": "../data/raw/" + main["path"],
+            "segment_indices": [1],
+            "metadata_path": "preprocessed/source.json",
+        }
+    from aind_ephys_ibl_gui_conversion.conversion_plan import selected_segment
+
+    assert selected_segment(main, analyzers)["raw_segment_index"] == 1
+    assert (
+        selected_segment(main, analyzers)["evidence"]
+        == "retained_preprocessing_source"
+    )
+    analyzers[0]["preprocessing_source"]["segment_indices"] = [0]
+    assert selected_segment(main, analyzers) is None
+
+
+@pytest.mark.parametrize(
+    "status,indices", [("unsupported", [0]), ("observed", [99])]
+)
+def test_present_but_unresolved_provenance_never_uses_length_fallback(
+    inventory, status, indices
+):
+    for analyzer in inventory["sortings"]:
+        if (
+            analyzer["stream"] == STREAM
+            and analyzer["experiment"] == "experiment1"
+        ):
+            analyzer["preprocessing_source"] = {
+                "status": status,
+                "segment_indices": indices,
+            }
+    plan = _plan(inventory)
+    assert "segment_mapping_unverified" in _codes(plan)
+
+
 def test_mismatched_names_do_not_resolve_multiple_acquisition_headers(
     inventory,
 ):

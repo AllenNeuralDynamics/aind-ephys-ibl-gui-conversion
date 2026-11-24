@@ -89,6 +89,21 @@ select a uniquely mapped shorter segment within the chosen raw recording.
 Repeated raw lengths, disagreement among analyzer groups, and genuinely
 multisegment analyzers remain unresolved. No session offsets are fabricated.
 
+When retained `preprocessed/<analyzer-name>.json` files are available,
+discovery reads their recording descriptions as bounded JSON. It records the
+source Zarr path and composes explicit `SelectSegmentRecording` selections
+through supported wrappers. No serialized class is imported or instantiated.
+The source must match both the raw asset boundary and the full recording path;
+explicit segment indices take precedence over sample-count correspondence.
+Sample counts, rates, and physical geometry remain required checks.
+
+The plan retains this evidence in each analyzer's `preprocessing_source`, and
+labels the segment decision `retained_preprocessing_source`. The legacy
+sample-count fallback applies only when provenance is absent. A present but
+unreadable or unsupported description, a different source, out-of-range
+selection, or disagreement among analyzer groups leaves conversion unresolved.
+Cropping and concatenation are not assumed to preserve source sample clocks.
+
 ## Continuous inputs
 
 The plan lists the collection's primary AP/wideband blocks and checks physical
