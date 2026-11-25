@@ -18,8 +18,15 @@ from aind_ephys_ibl_gui_conversion.conversion_plan import (
     inventory_digest,
     selected_segment,
 )
-from aind_ephys_ibl_gui_conversion.inventory import write_inventory
+from aind_ephys_ibl_gui_conversion.inventory import (
+    LocalMetadataStore,
+    write_inventory,
+)
 from aind_ephys_ibl_gui_conversion.probe_metadata import probe_metadata
+from aind_ephys_ibl_gui_conversion.recording_timing import (
+    observe_timing,
+    validate_pair,
+)
 from aind_ephys_ibl_gui_conversion.recording_utils import _stream_matches
 from aind_ephys_ibl_gui_conversion.spikes import _load_analyzer
 from aind_ephys_ibl_gui_conversion.types import (
@@ -125,6 +132,28 @@ def _observed(reference: Row, rows: dict[str, Row]) -> Row:
     return row
 
 
+def _validate_saved_timing(
+    reference: Row, observed: Row, roots: dict[str, Path]
+) -> None:
+    """Recheck bounded timestamp evidence before resetting recording clocks."""
+    store = LocalMetadataStore(Path(roots[reference["asset"]]))
+    for segment in observed["segments"]:
+        saved = segment.get("timing")
+        if saved is None or saved.get("status") != "observed":
+            continue
+        current = observe_timing(
+            store,
+            reference["path"],
+            segment["index"],
+            segment["sample_count"],
+            observed["sampling_frequency"],
+        )
+        if current != saved:
+            raise ValueError(
+                f"Live timestamp metadata changed: {observed['id']}"
+            )
+
+
 def validate_execution_plan(plan: Row, inventory: Row) -> None:
     """Allow known absent sorting shanks, rejecting unresolved decisions."""
     if plan.get("plan_version") != PLAN_VERSION:
@@ -196,6 +225,7 @@ class PlannedExtraction:
                         segment_index=b.segment_index,
                         role=b.source,
                         selected_main=b.selected_main,
+                        lfp_timing=b.lfp_timing,
                     )
                     for b in self.stream.blocks
                 ],
@@ -244,6 +274,45 @@ def _qc_segments(
     return [s for s in observed["segments"] if s["index"] == main_index]
 
 
+def _paired_timing(
+    reference: Row, observed: Row, records: dict[str, Row], index: int
+) -> Row | None:
+    """Check the saved pair decision without inferring a new source."""
+    if reference["paired_lfp"] is None:
+        return None
+    lf_observed = _observed(reference["paired_lfp"], records)
+    timing = validate_pair(
+        observed["segments"][index],
+        lf_observed["segments"][index],
+        observed["sampling_frequency"],
+        lf_observed["sampling_frequency"],
+    )
+    saved = reference.get("lfp_timing", {}).get(str(index))
+    if saved != timing and (
+        saved is not None
+        or timing["evidence"] == "sampled_timestamp_agreement"
+    ):
+        raise ValueError("Plan AP/LFP timing does not match inventory")
+    return timing
+
+
+def _short_qc_pair(
+    ap: Any, lf: Any, timing: Row | None, window: float
+) -> bool:
+    """Require one complete window in each source and their shared interval."""
+    durations = [
+        r.get_num_samples() / r.get_sampling_frequency()
+        for r in (ap, lf)
+        if r is not None
+    ]
+    if timing:
+        durations.append(
+            timing.get("overlap_end_s", float("inf"))
+            - timing.get("overlap_start_s", 0)
+        )
+    return min(durations) < window
+
+
 def prepare_extraction(
     plan: Row,
     inventory: Row,
@@ -276,11 +345,13 @@ def prepare_extraction(
         observed = _observed(reference, records)
         recording = si.read_zarr(resolve_reference(reference, roots))
         _validate_live(recording, observed, configs)
+        _validate_saved_timing(reference, observed, roots)
         lfp = None
         if reference["paired_lfp"] is not None:
             lfp_ref = reference["paired_lfp"]
             lfp = si.read_zarr(resolve_reference(lfp_ref, roots))
             _validate_live(lfp, _observed(lfp_ref, records), configs)
+            _validate_saved_timing(lfp_ref, _observed(lfp_ref, records), roots)
             if _geometry_in_channel_order(
                 _live_geometry(recording), recording.get_num_channels()
             ) != _geometry_in_channel_order(
@@ -293,11 +364,9 @@ def prepare_extraction(
             ap_segment = recording.select_segments([index])
             lf_segment = lfp.select_segments([index]) if lfp else None
             is_main = reference["id"] == main["id"] and index == main_index
-            if any(
-                r.get_num_samples()
-                < int(window_duration * r.get_sampling_frequency())
-                for r in (ap_segment, lf_segment)
-                if r is not None
+            pair_timing = _paired_timing(reference, observed, records, index)
+            if _short_qc_pair(
+                ap_segment, lf_segment, pair_timing, window_duration
             ):
                 if is_main:
                     raise ValueError("Selected main is shorter than QC window")
@@ -323,6 +392,7 @@ def prepare_extraction(
                     recording_id=reference["id"],
                     segment_index=index,
                     selected_main=is_main,
+                    lfp_timing=pair_timing,
                 )
             )
     analyzers = []

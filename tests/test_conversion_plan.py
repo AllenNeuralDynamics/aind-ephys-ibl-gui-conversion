@@ -562,6 +562,31 @@ def test_np1_missing_pair_is_reported_on_the_affected_block(inventory):
     assert "continuous_input_unresolved" in _codes(plan)
 
 
+def test_np1_pair_uses_timestamps_instead_of_requiring_equal_lengths(
+    inventory,
+):
+    paired = _np1_streams(inventory)
+    for ap in inventory["recordings"]:
+        if not ap["stream"].endswith("-AP"):
+            continue
+        lf = next(r for r in paired if r["experiment"] == ap["experiment"])
+        lf["segments"][0]["sample_count"] -= 24
+        for record, start in [(ap, 20.0), (lf, 20.0096)]:
+            segment = record["segments"][0]
+            count, rate = segment["sample_count"], record["sampling_frequency"]
+            segment["timing"] = {
+                "status": "observed",
+                "samples": [
+                    [i, start + i / rate] for i in [0, count // 2, count - 1]
+                ],
+            }
+    plan = _plan(inventory)
+    assert _codes(plan) == {"main_shanks_without_sorting"}
+    main = next(r for r in plan["continuous_inputs"] if r["role"] == "main")
+    assert main["selected"]
+    assert main["lfp_timing"]["0"]["lfp_offset_s"] == pytest.approx(0.0096)
+
+
 def test_qc_does_not_merge_a_different_physical_probe(inventory):
     other = _recording(inventory, 5)
     config = copy.deepcopy(

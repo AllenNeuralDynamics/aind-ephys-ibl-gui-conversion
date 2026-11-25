@@ -38,6 +38,31 @@ from aind_ephys_ibl_gui_conversion.types import (
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("offset", [0.0096, -0.0096])
+def test_np1_windows_use_shared_interval_in_ap_clock(offset):
+    ap, _ = _make_synthetic_recording(duration_sec=6, n_channels=4)
+    lf, _ = _make_synthetic_recording(duration_sec=6, fs=2500, n_channels=4)
+    block = ExperimentBlock(
+        ap,
+        lf,
+        0,
+        lfp_timing={
+            "lfp_offset_s": offset,
+            "overlap_start_s": max(0, offset),
+            "overlap_end_s": min(6, 6 + offset),
+        },
+    )
+    result = _compute_all_metrics(
+        block, window_duration=1, window_interval=1, min_coherency_windows=2
+    )
+    context = result.metric_context
+    assert context.timestamps[0] == pytest.approx(max(0, offset) + 0.5)
+    ap_times = context.ap.window_starts / 30000
+    lf_times = context.lfp.window_starts / 2500 + offset
+    np.testing.assert_allclose(ap_times, lf_times, atol=1 / 2500)
+    assert context.timestamps[-1] + 0.5 <= min(6, 6 + offset)
+
+
 def _make_synthetic_recording(
     duration_sec: float = 10.0,
     fs: float = 30000.0,

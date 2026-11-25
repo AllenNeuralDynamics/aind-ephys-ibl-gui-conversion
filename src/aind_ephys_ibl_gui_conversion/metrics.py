@@ -214,20 +214,29 @@ def _compute_all_metrics(
     fs = recording.get_sampling_frequency()
     n_samples_total = recording.get_num_samples()
     duration_total = n_samples_total / fs
+    timing = block.lfp_timing or {}
+    overlap_start = timing.get("overlap_start_s", 0.0)
+    overlap_end = timing.get("overlap_end_s", duration_total)
+    lfp_offset = timing.get("lfp_offset_s", 0.0)
+    usable_duration = overlap_end - overlap_start
+    if usable_duration < window_duration:
+        raise ValueError(
+            "AP/LFP shared interval is shorter than the QC window"
+        )
 
     # Adaptive interval: ensure enough windows for coherency
     interval = max(
         window_duration,
-        min(window_interval, duration_total / min_coherency_windows),
+        min(window_interval, usable_duration / min_coherency_windows),
     )
 
     window_starts_sec = np.arange(
-        0, duration_total - window_duration, interval
+        overlap_start, overlap_end - window_duration, interval
     )
     n_windows = len(window_starts_sec)
     if n_windows == 0:
         n_windows = 1
-        window_starts_sec = np.array([0.0])
+        window_starts_sec = np.array([overlap_start])
     window_samples = int(window_duration * fs)
     timestamps = window_starts_sec + window_duration / 2.0
 
@@ -311,7 +320,7 @@ def _compute_all_metrics(
         ap=ap_context,
         lfp=(
             SourceContext.from_recording(
-                lfp_src, lfp_window_samples, window_starts_sec
+                lfp_src, lfp_window_samples, window_starts_sec - lfp_offset
             )
             if lfp_recording is not None
             else ap_context

@@ -17,6 +17,7 @@ from collections import defaultdict
 from typing import Any
 
 from aind_ephys_ibl_gui_conversion.inventory import inventory_slice
+from aind_ephys_ibl_gui_conversion.recording_timing import validate_pair
 
 PLAN_VERSION = "1.0.0"
 PLAN_FILENAME = "ephys_conversion_plan.json"
@@ -498,11 +499,11 @@ def _shank_coverage(
 
 def _paired_lfp(
     inventory: Row, recording: Row, indices: list[int] | None = None
-) -> tuple[Row | None, str | None]:
-    """Keep NP1 AP/LFP pairing within the same asset and experiment."""
+) -> tuple[Row | None, str | None, Row]:
+    """Pair within one source and validate timing before selecting QC."""
     stream = recording.get("stream") or ""
     if not stream.endswith("-AP"):
-        return None, None
+        return None, None, {}
     pairs = [
         r
         for r in inventory["recordings"]
@@ -511,28 +512,27 @@ def _paired_lfp(
         and r.get("stream") == stream[:-3] + "-LFP"
     ]
     if len(pairs) != 1 or _duration(pairs[0]) is None:
-        return None, "missing_or_ambiguous_lfp_pair"
+        return None, "missing_or_ambiguous_lfp_pair", {}
     paired = pairs[0]
     if len(paired["segments"]) != len(recording["segments"]):
-        return paired, "lfp_segment_mismatch"
-    ap_rate, lfp_rate = (
-        recording["sampling_frequency"],
-        paired["sampling_frequency"],
-    )
-    if any(
-        not math.isclose(
-            a["sample_count"] / ap_rate,
-            b["sample_count"] / lfp_rate,
-            rel_tol=0,
-            abs_tol=1 / min(ap_rate, lfp_rate),
-        )
-        for index, (a, b) in enumerate(
-            zip(recording["segments"], paired["segments"])
-        )
-        if indices is None or index in indices
+        return paired, "lfp_segment_mismatch", {}
+    timing = {}
+    for index, (ap, lf) in enumerate(
+        zip(recording["segments"], paired["segments"])
     ):
-        return paired, "lfp_duration_mismatch"
-    return paired, None
+        if indices is not None and index not in indices:
+            continue
+        try:
+            timing[str(index)] = validate_pair(
+                ap,
+                lf,
+                recording["sampling_frequency"],
+                paired["sampling_frequency"],
+            )
+        except ValueError as exc:
+            timing[str(index)] = {"error": str(exc)}
+            return paired, f"lfp_timing_unverified: {exc}", timing
+    return paired, None, timing
 
 
 def _continuous_inputs(
@@ -577,10 +577,10 @@ def _continuous_inputs(
             and plan.get("main_segment") is not None
             else [s["index"] for s in recording["segments"]]
         )
-        paired, pair_problem = (
+        paired, pair_problem, pair_timing = (
             _paired_lfp(inventory, recording, indices)
             if reason is None
-            else (None, None)
+            else (None, None, {})
         )
         reason = reason or pair_problem
         role = (
@@ -597,6 +597,7 @@ def _continuous_inputs(
                 segments=recording["segments"],
                 segment_indices=indices,
                 paired_lfp=_reference(paired) if paired is not None else None,
+                lfp_timing=pair_timing,
                 channel_configuration=recording["channel_configuration"],
                 selected=reason is None,
                 exclusion_reason=reason,
@@ -615,6 +616,7 @@ def _continuous_inputs(
                 "incomplete",
                 recording_id=recording["id"],
                 reason=reason,
+                timing_details=pair_timing if pair_problem else None,
             )
     plan["continuous_inputs"] = inputs
 

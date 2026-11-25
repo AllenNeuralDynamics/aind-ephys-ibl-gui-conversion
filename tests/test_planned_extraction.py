@@ -406,6 +406,63 @@ def test_paired_lfp_uses_exact_reference_and_own_rate(planned):
     assert block.lfp_recording.get_num_samples() == 12500
 
 
+def test_timestamp_pair_preserves_ap_origin_and_revalidates_evidence(planned):
+    from aind_ephys_ibl_gui_conversion.inventory import LocalMetadataStore
+    from aind_ephys_ibl_gui_conversion.recording_timing import (
+        observe_timing,
+        validate_pair,
+    )
+
+    plan, inv, roots, _ = planned
+    row = inv["recordings"][0]
+    path = roots["raw"] / row["path"]
+    original = si.read_zarr(path)
+    data, probe = original.get_traces(), original.get_probe()
+    ap = si.NumpyRecording(data, 30000)
+    ap.set_probe(probe)
+    ap.set_channel_gains(1)
+    ap.set_channel_offsets(0)
+    ap.set_times(20 + np.arange(len(data)) / 30000)
+    shutil.rmtree(path)
+    ap.save(format="zarr", folder=path, verbose=False)
+    lf = si.NumpyRecording(np.zeros((12476, 4), dtype="float32"), 2500)
+    lf.set_probe(probe)
+    lf.set_channel_gains(1)
+    lf.set_channel_offsets(0)
+    lf.set_times(20.0096 + np.arange(12476) / 2500)
+    lf_row = dict(
+        row,
+        id="lfp",
+        path="ecephys/lfp.zarr",
+        sampling_frequency=2500,
+        segments=[dict(index=0, sample_count=12476, channel_count=4)],
+    )
+    lf.save(format="zarr", folder=roots["raw"] / lf_row["path"], verbose=False)
+    store = LocalMetadataStore(roots["raw"])
+    row["segments"][0]["timing"] = observe_timing(
+        store, row["path"], 0, len(data), 30000
+    )
+    lf_row["segments"][0]["timing"] = observe_timing(
+        store, lf_row["path"], 0, 12476, 2500
+    )
+    inv["recordings"].append(lf_row)
+    reference = plan["continuous_inputs"][0]
+    reference["paired_lfp"] = lf_row
+    reference["lfp_timing"] = {
+        "0": validate_pair(
+            row["segments"][0], lf_row["segments"][0], 30000, 2500
+        )
+    }
+    plan["inventory_digest"] = inventory_digest(inv)
+    execution = _prepare(planned)
+    block = execution.stream.main_block
+    assert block.recording.get_times()[0] == 0
+    assert block.lfp_timing["lfp_offset_s"] == pytest.approx(0.0096)
+    reference["lfp_timing"]["0"]["lfp_offset_s"] = 0
+    with pytest.raises(ValueError, match="Plan AP/LFP timing"):
+        _prepare(planned)
+
+
 def _multisegment_main(planned):
     plan, inv, roots, _ = planned
     row = inv["recordings"][0]
