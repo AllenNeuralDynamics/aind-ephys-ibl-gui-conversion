@@ -6,8 +6,11 @@ GUI datapackage schema. Discovery writes `ephys_inventory.json`; the separate
 conversion plan selects inputs for extraction.
 
 The reader uses Open Ephys `structure.oebin`, SpikeInterface Zarr v2 attributes
-and array headers, and consolidated or unconsolidated analyzer metadata. It
-never opens signal chunks, sorting arrays, extensions, or pickled provenance.
+and array headers, and consolidated or unconsolidated analyzer metadata. Where
+supported, it reads five timestamp scalars per segment using bounded byte ranges,
+or an explicit segment start time. These observations are stored in each
+segment's `timing` field. It never opens voltage chunks, sorting arrays,
+extensions, or pickled provenance.
 Unsupported or unreadable metadata produces an incomplete source record.
 
 ## Version 1 structure

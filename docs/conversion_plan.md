@@ -117,6 +117,31 @@ the `surface` role; short duration alone never does. NP1 LFP inputs are paired
 with AP blocks within the same source asset and experiment, with compatible
 segment durations. LFP blocks do not compete as main AP recordings.
 
+For timestamped NP1 sources, discovery reads five evenly spaced timestamp
+scalars per segment, including the first and last, using bounded reads from
+float64 Zarr v2 `times_seg<N>` arrays. Uncompressed arrays use scalar byte
+ranges; Blosc timestamps decode individual chunks with an 8 MiB limit on both
+encoded and decoded sizes. Explicit `t_starts` arrays are also supported.
+It never reads voltage chunks or loads a full timestamp vector. Unsupported
+timestamp encodings remain unresolved.
+
+The planner accepts a pair when sampled timestamps fit affine sample clocks,
+relative clock disagreement stays within one LFP sample over the segment,
+and the start and end boundaries differ by at most 50 ms. This is a bounded
+edge-skew policy, not permission to pair recordings by similar duration.
+Source, experiment, stream, segment, and geometry checks still apply. Each
+selected pair records `lfp_timing`, including its measured offset in AP
+sample-zero seconds, common interval, clock disagreement, and policy limits.
+Without timestamp evidence, the strict legacy duration check remains.
+
+Extraction rechecks saved timing samples against the mounted data before
+resetting clocks. QC windows stay inside the shared interval; LFP read indices
+account for its measured start offset. RMS timestamps remain in the AP
+sample-zero clock used by spikes, with source-index quantization bounded by
+one LFP sample. Spectral frequencies retain the sources' nominal sampling
+rates. This samples clock consistency rather than scanning for every possible
+timestamp discontinuity; it does not resample voltage traces.
+
 ## Findings and readiness
 
 - `ready`: the metadata supports the recorded decisions.

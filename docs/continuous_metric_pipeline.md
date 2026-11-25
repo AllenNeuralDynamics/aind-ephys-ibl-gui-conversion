@@ -30,6 +30,13 @@ window. Skipped blocks contribute no metrics or channel coverage. A stream
 with no usable blocks raises an error, as does a requested main/surface
 coherency source with no remaining matching blocks.
 
+Planned NP1 blocks retain the measured LFP start offset relative to AP. Their
+QC windows use the shared AP/LFP interval, and each source gets its own sample
+indices for that interval. Output window times use AP's sample-zero clock;
+spike times keep the same origin. The saved conversion plan and extraction
+receipt retain the timing evidence and shared interval. Legacy blocks without
+timing evidence keep the existing independent sample-zero convention.
+
 These are three different units: an experiment block is a recording task, a
 time window is a sampled interval within that recording, and a storage chunk
 is the underlying Zarr/WavPack read unit. A short requested interval may still

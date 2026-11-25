@@ -25,6 +25,7 @@ class ExperimentBlock:
     recording_id: str | None = None
     segment_index: int = 0
     selected_main: bool = False
+    lfp_timing: dict[str, Any] | None = None
 
     @property
     def is_1_0(self) -> bool:

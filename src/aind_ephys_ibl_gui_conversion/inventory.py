@@ -1,7 +1,8 @@
 """Observe recording membership without choosing conversion inputs.
 
-Only JSON metadata is read. Sorting analyzers are never instantiated and no
-signal, spike, extension, or pickled payload is decoded. Storage names supply
+JSON metadata and bounded timestamp samples are read. Sorting analyzers are
+never instantiated and no voltage, spike, extension, or pickled payload is
+decoded. Storage names supply
 candidate relationships, not authoritative acquisition identities.
 """
 
@@ -15,6 +16,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
 from aind_ephys_ibl_gui_conversion.probe_metadata import probe_metadata
+from aind_ephys_ibl_gui_conversion.recording_timing import observe_timing
 from aind_ephys_ibl_gui_conversion.source_provenance import (
     parse_preprocessing_source,
     source_matches,
@@ -73,6 +75,22 @@ class LocalMetadataStore:
         if len(content) > MAX_METADATA_BYTES:
             raise ValueError("Metadata exceeds size limit")
         return json.loads(content)
+
+    def read_bytes(self, path: str, *, offset: int, size: int) -> bytes:
+        """Read a bounded timestamp scalar inside a mounted asset."""
+        if offset < 0 or not 0 < size <= MAX_METADATA_BYTES:
+            raise ValueError("Invalid bounded metadata read")
+        with self._path(path).open("rb") as handle:
+            handle.seek(offset)
+            return handle.read(size)
+
+    def read_chunk(self, path: str) -> bytes:
+        """Read a size-limited compressed timestamp chunk."""
+        with self._path(path).open("rb") as handle:
+            content = handle.read(MAX_METADATA_BYTES + 1)
+        if len(content) > MAX_METADATA_BYTES:
+            raise ValueError("Timestamp chunk exceeds size limit")
+        return content
 
 
 def _id(asset: str, path: str, kind: str) -> str:
@@ -238,6 +256,16 @@ def _compressed_record(
                 channel_count=shape[1] if len(shape) == 2 else None,
             )
         )
+        rate = attrs.get("sampling_frequency")
+        if (
+            shape
+            and shape[0] > 1
+            and isinstance(rate, (int, float))
+            and rate > 0
+        ):
+            segments[-1]["timing"] = observe_timing(
+                store, path, index, shape[0], rate
+            )
     record_id = _id(asset, path, "compressed")
     inventory["recordings"].append(
         dict(
